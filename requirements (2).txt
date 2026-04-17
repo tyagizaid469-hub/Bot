@@ -1,0 +1,12 @@
+python-telegram-bot[webhooks,job-queue]==20.7
+psycopg2-binary
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+reportlab
+requests
+python-dotenv==1.0.1
+flask
+telethon
+asyncio
