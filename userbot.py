@@ -28,8 +28,7 @@ for s in SESSION_STRINGS:
 client_index = 0
 
 # ========= GLOBAL =========
-CLIENT_STATE = {}   # idx -> {user_id, msg_id}
-CLICKED = set()
+TASKS = {}   # msg_id -> {user_id, client_idx, stages_done:set()}
 
 # ========= DB =========
 def db():
@@ -41,7 +40,6 @@ def init_db():
     con = db()
     cur = con.cursor()
 
-    # registrations
     cur.execute("""
     CREATE TABLE IF NOT EXISTS registrations(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,19 +55,6 @@ def init_db():
     )
     """)
 
-    # jobs
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS jobs(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        job_type TEXT,
-        payload TEXT,
-        status TEXT,
-        created_at INTEGER
-    )
-    """)
-
-    # 🔥 IMPORTANT mapping
     cur.execute("""
     CREATE TABLE IF NOT EXISTS task_map(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,95 +100,96 @@ async def auto_handler(event):
     msg_id = msg.id
     text = (msg.text or "").lower()
 
-    for idx, state in list(CLIENT_STATE.items()):
+    if msg_id not in TASKS:
+        return
 
-        if msg_id != state["msg_id"]:
-            continue
+    state = TASKS[msg_id]
+    stages_done = state["stages"]
 
-        # 🔥 STOP BEFORE FINAL
-        if "click again to confirm" in text:
-            print("[AUTO] ⛔ WAIT FINAL CONFIRM")
-            return
+    # ================= STEP DETECTION =================
 
-        # 🔥 BUTTON FLOW
-        if msg.buttons:
-            for row in msg.buttons:
-                for btn in row:
-                    t = (btn.text or "").lower()
+    # STEP 1 → DONE
+    if "done" in text and "confirm" not in text and "step1" not in stages_done:
+        await click_button(msg, "done")
+        stages_done.add("step1")
+        print("[AUTO] STEP1 DONE")
+        return
 
-                    key = f"{msg_id}_{btn.text}"
-                    if key in CLICKED:
-                        continue
+    # STEP 2 → COMPLETE
+    if "complete" in text and "step2" not in stages_done:
+        await click_button(msg, "complete")
+        stages_done.add("step2")
+        print("[AUTO] STEP2 COMPLETE")
+        return
 
-                    try:
-                        if "done" in t and "confirm" not in text:
-                            await msg.click(text=btn.text)
-                            CLICKED.add(key)
-                            print("[AUTO] STEP1 DONE")
-                            return
+    # STEP 3 → CONFIRM
+    if "confirm" in text and "again" not in text and "step3" not in stages_done:
+        await click_button(msg, "confirm")
+        stages_done.add("step3")
+        print("[AUTO] STEP3 CONFIRM")
+        return
 
-                        elif "complete" in t:
-                            await msg.click(text=btn.text)
-                            CLICKED.add(key)
-                            print("[AUTO] STEP2 COMPLETE")
-                            return
+    # STOP AUTO HERE
+    if "click again to confirm" in text:
+        print("[AUTO] ⛔ WAIT FINAL")
+        return
 
-                        elif "confirm" in t:
-                            await msg.click(text=btn.text)
-                            CLICKED.add(key)
-                            print("[AUTO] STEP3 CONFIRM")
-                            return
+    # FINAL DATA
+    if "email" in text and "password" in text:
+        user_id = state["user_id"]
 
-                    except Exception as e:
-                        print("[CLICK ERROR]", e)
+        first, last, email, password, recovery = parse_task(msg.text or "")
 
-        # 🔥 FINAL DATA FETCH
-        if "email" in text and "password" in text:
-            user_id = state["user_id"]
+        con = db()
+        cur = con.cursor()
 
-            first, last, email, password, recovery = parse_task(msg.text or "")
+        cur.execute("""
+        INSERT INTO registrations(
+            user_id, first_name, last_name, email, password,
+            recovery_email, msg_id, created_at, state
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """, (
+            user_id, first, last, email, password,
+            recovery, msg_id, int(time.time()), "fetched"
+        ))
 
-            con = db()
-            cur = con.cursor()
+        con.commit()
+        con.close()
 
-            cur.execute("""
-            INSERT INTO registrations(
-                user_id, first_name, last_name, email, password,
-                recovery_email, msg_id, created_at, state
-            )
-            VALUES(?,?,?,?,?,?,?,?,?)
-            """, (
-                user_id, first, last, email, password,
-                recovery, msg_id, int(time.time()), "fetched"
-            ))
+        print("[FETCH] ✅ SAVED")
+        return
 
-            con.commit()
-            con.close()
+# ========= BUTTON CLICK =========
+async def click_button(msg, keyword):
+    if not msg.buttons:
+        return
 
-            print("[FETCH] ✅ SAVED")
-
-            CLIENT_STATE.pop(idx, None)
-            CLICKED.clear()
-            return
+    for row in msg.buttons:
+        for btn in row:
+            if keyword in (btn.text or "").lower():
+                try:
+                    await msg.click(text=btn.text)
+                    return
+                except Exception as e:
+                    print("[CLICK ERROR]", e)
 
 # ========= FETCH =========
 async def fetch_task(user_id):
     idx, client = get_client()
 
     async with locks[idx]:
-        print("[FETCH] 🔄", user_id)
-
         await client.send_message(SOURCE, "➕ Register a new Gmail")
         await asyncio.sleep(2)
 
         msg = (await client.get_messages(SOURCE, limit=1))[0]
 
-        CLIENT_STATE[idx] = {
+        TASKS[msg.id] = {
             "user_id": user_id,
-            "msg_id": msg.id
+            "client_idx": idx,
+            "stages": set()
         }
 
-        # ✅ SAVE mapping
         con = db()
         cur = con.cursor()
         cur.execute("""
@@ -213,118 +199,47 @@ async def fetch_task(user_id):
         con.commit()
         con.close()
 
-        print("[TRACK]", msg.id, "client", idx)
+        print("[TRACK]", msg.id)
 
 # ========= CONFIRM =========
 async def confirm_task(user_id):
-    # 🔥 GET mapping
     con = db()
     cur = con.cursor()
 
     cur.execute("""
-    SELECT msg_id, client_idx
-    FROM task_map
-    WHERE user_id=?
-    ORDER BY id DESC LIMIT 1
+    SELECT msg_id, client_idx FROM task_map
+    WHERE user_id=? ORDER BY id DESC LIMIT 1
     """, (user_id,))
 
     row = cur.fetchone()
     con.close()
 
     if not row:
-        print("[CONFIRM] ❌ mapping not found")
         return
 
-    msg_id = int(row["msg_id"])
-    client_idx = int(row["client_idx"])
+    msg_id = row["msg_id"]
+    client = clients[row["client_idx"]]
 
-    client = clients[client_idx]
+    msg = await client.get_messages(SOURCE, ids=msg_id)
 
-    async with locks[client_idx]:
-        print("[CONFIRM] 🔄", msg_id)
-
-        msg = await client.get_messages(SOURCE, ids=msg_id)
-        if not msg:
-            return
-
-        # 🔥 FINAL DONE ONLY
-        if msg.buttons:
-            for row_btn in msg.buttons:
-                for btn in row_btn:
-                    if "done" in (btn.text or "").lower():
-                        await msg.click(text=btn.text)
-                        print("[CONFIRM] ✅ FINAL DONE CLICK")
-                        break
-
-        success = False
-
-        for _ in range(30):
-            msg = await client.get_messages(SOURCE, ids=msg_id)
-            text = (msg.text or "").lower()
-
-            if "logout" in text:
-                success = True
-                break
-
-            await asyncio.sleep(1)
-
-        con = db()
-        cur = con.cursor()
-
-        state_val = "done" if success else "failed"
-        cur.execute("UPDATE registrations SET state=? WHERE msg_id=?", (state_val, msg_id))
-
-        con.commit()
-        con.close()
-
-        print("[CONFIRM] RESULT:", state_val)
-
-# ========= JOB LOOP =========
-async def job_loop():
-    while True:
-        con = db()
-        cur = con.cursor()
-
-        cur.execute("SELECT * FROM jobs WHERE status='pending' LIMIT 1")
-        job = cur.fetchone()
-
-        if not job:
-            con.close()
-            await asyncio.sleep(1)
-            continue
-
-        cur.execute("UPDATE jobs SET status='processing' WHERE id=?", (job["id"],))
-        con.commit()
-        con.close()
-
-        try:
-            if job["job_type"] == "fetch":
-                await fetch_task(job["user_id"])
-
-            elif job["job_type"] == "confirm":
-                await confirm_task(job["user_id"])
-
-            con = db()
-            cur = con.cursor()
-            cur.execute("UPDATE jobs SET status='done' WHERE id=?", (job["id"],))
-            con.commit()
-            con.close()
-
-        except Exception as e:
-            print("[ERROR]", e)
+    if msg and msg.buttons:
+        for row_btn in msg.buttons:
+            for btn in row_btn:
+                if "done" in (btn.text or "").lower():
+                    await msg.click(text=btn.text)
+                    print("[CONFIRM] FINAL DONE")
+                    return
 
 # ========= START =========
 async def main():
     init_db()
 
     for i, c in enumerate(clients):
-        await c.connect()
-        if await c.is_user_authorized():
-            c.add_event_handler(auto_handler, events.NewMessage(from_users=SOURCE))
-            c.add_event_handler(auto_handler, events.MessageEdited(from_users=SOURCE))
-            print("[READY]", i)
+        await c.start()
+        c.add_event_handler(auto_handler, events.NewMessage(from_users=SOURCE))
+        c.add_event_handler(auto_handler, events.MessageEdited(from_users=SOURCE))
+        print("[READY]", i)
 
-    asyncio.create_task(job_loop())
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
