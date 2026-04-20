@@ -112,7 +112,7 @@ async def auto_handler(event):
     if "done" in text and "confirm" not in text and "step1" not in stages_done:
         await click_button(msg, "done")
         stages_done.add("step1")
-        print("[AUTO] STEP1 DONE")
+        print("[AUTO] STEP1 ✅")
         return
 
     # STEP 2 → COMPLETE
