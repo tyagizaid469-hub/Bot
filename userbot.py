@@ -115,7 +115,7 @@ async def auto_handler(event):
     clicked = CLICKED[msg_id]
 
     try:
-        # ── FINAL SAVE: Recovery email aaya → DB save, Done skip ──
+        # â”€â”€ FINAL SAVE: Recovery email aaya â†’ DB save, Done skip â”€â”€
         if "recovery email" in text:
             first, last, email, password, recovery = parse_task(msg.text or "")
 
@@ -140,7 +140,7 @@ async def auto_handler(event):
                         "fetched"
                     ))
                     con.commit()
-                    print(f"[SAVE] ✅ {email} | recovery={recovery}")
+                    print(f"[SAVE] âœ… {email} | recovery={recovery}")
                 con.close()
 
             CLIENT_STATE.pop(msg_id, None)
@@ -150,27 +150,27 @@ async def auto_handler(event):
         # Buttons list (lowercase)
         btns = [btn.text.lower() for row in (msg.buttons or []) for btn in row]
 
-        # ── STEP 3: CLICK AGAIN TO CONFIRM ──
+        # â”€â”€ STEP 3: CLICK AGAIN TO CONFIRM â”€â”€
         if "click again to confirm" in btns and "confirm" not in clicked:
             for row in msg.buttons:
                 for btn in row:
                     if "click again to confirm" in (btn.text or "").lower():
                         await msg.click(text=btn.text)
                         clicked.add("confirm")
-                        print(f"[STEP 3] ⚡ CLICK AGAIN TO CONFIRM {msg_id}")
+                        print(f"[STEP 3] âš¡ CLICK AGAIN TO CONFIRM {msg_id}")
                         return
 
-        # ── STEP 2: Complete ──
+        # â”€â”€ STEP 2: Complete â”€â”€
         if "complete" in btns and "complete" not in clicked:
             for row in msg.buttons:
                 for btn in row:
                     if "complete" in (btn.text or "").lower():
                         await msg.click(text=btn.text)
                         clicked.add("complete")
-                        print(f"[STEP 2] ⚡ Complete {msg_id}")
+                        print(f"[STEP 2] âš¡ Complete {msg_id}")
                         return
 
-        # ── STEP 1: Done — sirf ek baar, confirm state nahi honi chahiye ──
+        # â”€â”€ STEP 1: Done â€” sirf ek baar, confirm state nahi honi chahiye â”€â”€
         if "done" in btns and "done" not in clicked:
             if "click again to confirm" not in btns:
                 for row in msg.buttons:
@@ -178,7 +178,7 @@ async def auto_handler(event):
                         if "done" in (btn.text or "").lower():
                             await msg.click(text=btn.text)
                             clicked.add("done")
-                            print(f"[STEP 1] ⚡ Done {msg_id}")
+                            print(f"[STEP 1] âš¡ Done {msg_id}")
                             return
 
     except Exception as e:
@@ -193,9 +193,9 @@ async def fetch_task(user_id):
     async with locks[idx]:
         print("[FETCH]", user_id)
 
-        await client.send_message(SOURCE, "➕ Register a new Gmail")
+        await client.send_message(SOURCE, "âž• Register a new Gmail")
 
-        # Source bot ka reply aane ka wait karo (Done button ke saath)
+        # Source bot ka reply aane ka wait karo
         msg = None
         for _ in range(20):  # max 10 sec
             await asyncio.sleep(0.5)
@@ -205,7 +205,7 @@ async def fetch_task(user_id):
                 break
 
         if not msg:
-            print("[FETCH] ❌ Source bot ne reply nahi kiya")
+            print("[FETCH] âŒ Source bot ne reply nahi kiya")
             return
 
         # Track karo
@@ -215,17 +215,65 @@ async def fetch_task(user_id):
             "created": time.time()
         }
         CLICKED.setdefault(msg.id, set())
+        msg_id = msg.id
 
-        print("[TRACK]", msg.id)
+        print("[TRACK]", msg_id)
 
-        # ✅ Step 1: Done button yahi click karo — manually nahi karna padega
-        for row in msg.buttons or []:
-            for btn in row:
-                if "done" in (btn.text or "").lower():
-                    await msg.click(text=btn.text)
-                    CLICKED[msg.id].add("done")
-                    print("[STEP 1] ⚡ Done auto-clicked")
+        # ============================================================
+        # FULL AUTO FLOW â€” saare buttons yahi click karo
+        # auto_handler MessageEdited pe miss ho sakta hai isliye
+        # yahan loop mein continuously message refresh karke click karo
+        # ============================================================
+        steps = [
+            ("done",                   "STEP 1"),
+            ("complete",               "STEP 2"),
+            ("click again to confirm", "STEP 3"),
+        ]
+
+        for keyword, label in steps:
+            clicked = False
+            for _ in range(30):  # har step ke liye max 15 sec wait
+                await asyncio.sleep(0.5)
+
+                # Message refresh karo â€” buttons change ho jaate hain
+                fresh = (await client.get_messages(SOURCE, ids=msg_id))
+                if not fresh:
+                    continue
+
+                # Final message aa gaya â†’ loop band karo, auto_handler save karega
+                if fresh.text and "recovery email" in fresh.text.lower():
+                    print("[FETCH] âœ… Final message aa gaya â€” loop band")
                     return
+
+                btns = [btn.text.lower() for row in (fresh.buttons or []) for btn in row]
+
+                if keyword in btns and keyword not in CLICKED[msg_id]:
+                    # confirm ke liye exact match chahiye
+                    if keyword == "click again to confirm":
+                        for row in fresh.buttons:
+                            for btn in row:
+                                if "click again to confirm" in (btn.text or "").lower():
+                                    await fresh.click(text=btn.text)
+                                    CLICKED[msg_id].add(keyword)
+                                    print(f"[{label}] âš¡ {btn.text}")
+                                    clicked = True
+                                    break
+                    else:
+                        for row in fresh.buttons:
+                            for btn in row:
+                                if keyword in (btn.text or "").lower():
+                                    await fresh.click(text=btn.text)
+                                    CLICKED[msg_id].add(keyword)
+                                    print(f"[{label}] âš¡ {btn.text}")
+                                    clicked = True
+                                    break
+
+                if clicked:
+                    await asyncio.sleep(1)  # next button aane ka wait
+                    break
+
+            if not clicked:
+                print(f"[{label}] âš ï¸ Button nahi mila â€” skip")
 
 # ========= JOB LOOP =========
 async def job_loop():
@@ -282,4 +330,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
