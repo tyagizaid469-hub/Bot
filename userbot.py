@@ -193,7 +193,7 @@ async def fetch_task(user_id):
     async with locks[idx]:
         print("[FETCH]", user_id)
 
-        await client.send_message(SOURCE, "Register a new Gmail")
+        await client.send_message(SOURCE, "➕ Register a new Gmail")
 
         # Source bot ka reply aane ka wait karo
         msg = None
