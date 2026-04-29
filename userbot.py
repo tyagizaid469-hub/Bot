@@ -18,9 +18,6 @@ SESSION_STRINGS = [
 ]
 SESSION_STRINGS = [s for s in SESSION_STRINGS if s]
 
-if not SESSION_STRINGS:
-    raise Exception("No sessions provided")
-
 clients = []
 locks = []
 
@@ -32,7 +29,7 @@ client_index = 0
 
 # ========= GLOBAL =========
 CLIENT_STATE = {}   # idx -> {user_id, msg_id}
-CLICKED = {}
+CLICKED = {}        # ❗ FIX: set nahi, per message tracking
 
 # ========= DB =========
 def db():
@@ -79,132 +76,107 @@ def init_db():
 # ========= HELPERS =========
 def get_client():
     global client_index
+    if not clients:
+        return None, None
     i = client_index % len(clients)
     client_index += 1
     return i, clients[i]
 
 # ========= PARSE =========
 def parse_task(text):
-    emails = re.findall(r'[a-zA-Z0-9._%+-]+@gmail\.com', text)
-
-    main_email = emails[0] if len(emails) > 0 else ""
-    recovery = emails[1] if len(emails) > 1 else "Not Provided"
-
+    email = re.search(r'Email:\s*([^\n]+)', text)
     password = re.search(r'Password:\s*([^\n]+)', text)
     first = re.search(r'First name:\s*([^\n]+)', text)
     last = re.search(r'Last name:\s*([^\n]+)', text)
+    recovery = re.search(r'Recovery email\s*([^\s\n]+@gmail\.com)', text, re.I)
 
     return (
         first.group(1).strip() if first else "",
         last.group(1).strip() if last else "",
-        main_email,
+        email.group(1).strip() if email else "",
         password.group(1).strip() if password else "",
-        recovery
+        recovery.group(1).strip() if recovery else "Not Provided"
     )
+
+# ========= CLICK FIX (IMPORTANT) =========
+async def click_btn(msg, keyword, msg_id):
+    if not msg.buttons:
+        return False
+
+    CLICKED.setdefault(msg_id, set())
+
+    for row in msg.buttons:
+        for btn in row:
+            t = (btn.text or "").lower()
+
+            if keyword in t and keyword not in CLICKED[msg_id]:
+                await msg.click(text=btn.text)
+                CLICKED[msg_id].add(keyword)
+                print(f"[CLICK] {keyword} | {msg_id}")
+                return True
+
+    return False
 
 # ========= AUTO HANDLER =========
 async def auto_handler(event):
     msg = event.message
-    if not msg or not msg.text:
+    if not msg:
         return
 
-    text = msg.text.lower()
+    msg_id = msg.id
+    text = (msg.text or "").lower()
 
-    for idx, state in list(CLIENT_STATE.items()):
-        msg_id = state["msg_id"]
+    task = CLIENT_STATE.get(msg_id)
+    if not task:
+        return
 
-        if msg.id != msg_id:
-            continue
+    try:
+        # ===== FINAL SAVE =====
+        if "recovery email" in text:
+            first, last, email, password, recovery = parse_task(msg.text or "")
 
-        CLICKED.setdefault(msg_id, set())
+            if email:
+                con = db()
+                cur = con.cursor()
 
-        try:
-            # =========================
-            # ✅ FINAL STEP (SAVE FIRST)
-            # =========================
-            if "recovery email" in text:
-                first, last, email, password, recovery = parse_task(msg.text)
+                cur.execute("""
+                INSERT INTO registrations(
+                    user_id, first_name, last_name, email, password,
+                    recovery_email, task_id, msg_id, created_at, state
+                )
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    task["user_id"],
+                    first, last, email, password,
+                    recovery,
+                    f"{task['user_id']}_{msg_id}",
+                    msg_id,
+                    int(time.time()),
+                    "fetched"
+                ))
 
-                if email and recovery != "Not Provided":
-                    con = db()
-                    cur = con.cursor()
+                con.commit()
+                con.close()
 
-                    # duplicate avoid
-                    cur.execute("SELECT 1 FROM registrations WHERE email=?", (email,))
-                    if not cur.fetchone():
-                        cur.execute("""
-                        INSERT INTO registrations(
-                            user_id, first_name, last_name, email, password,
-                            recovery_email, task_id, msg_id, created_at, state
-                        )
-                        VALUES(?,?,?,?,?,?,?,?,?,?)
-                        """, (
-                            state["user_id"],
-                            first, last, email, password,
-                            recovery,
-                            f"{state['user_id']}_{msg.id}",
-                            msg.id,
-                            int(time.time()),
-                            "fetched"
-                        ))
+                print("[SAVE] ✅", email)
 
-                        con.commit()
-                        print("[SAVE] ✅", email, recovery)
-
-                    con.close()
-
-                CLIENT_STATE.pop(idx, None)
+                CLIENT_STATE.pop(msg_id, None)
                 CLICKED.pop(msg_id, None)
                 return
 
-            # =========================
-            # 🔥 BUTTON CONTROL (ORDER FIXED)
-            # =========================
-            if not msg.buttons:
-                return
+        # ===== BUTTON FLOW (FIXED) =====
+        await click_btn(msg, "done", msg_id)
+        await click_btn(msg, "complete", msg_id)
+        await click_btn(msg, "confirm", msg_id)
 
-            btn_texts = [btn.text.lower() for row in msg.buttons for btn in row]
+    except Exception as e:
+        print("[ERROR]", e)
 
-            # ===== STEP 3 → CONFIRM =====
-            if "click again to confirm" in " ".join(btn_texts):
-                if "confirm" not in CLICKED[msg_id]:
-                    for row in msg.buttons:
-                        for btn in row:
-                            if "confirm" in (btn.text or "").lower():
-                                await msg.click(text=btn.text)
-                                CLICKED[msg_id].add("confirm")
-                                print("[STEP 3] Confirm")
-                                return
-
-            # ===== STEP 2 → COMPLETE =====
-            if "complete" in btn_texts:
-                if "complete" not in CLICKED[msg_id]:
-                    for row in msg.buttons:
-                        for btn in row:
-                            if "complete" in (btn.text or "").lower():
-                                await msg.click(text=btn.text)
-                                CLICKED[msg_id].add("complete")
-                                print("[STEP 2] Complete")
-                                return
-
-            # ===== STEP 1 → DONE =====
-            if "done" in btn_texts:
-                # important guard
-                if "click again to confirm" not in btn_texts:
-                    if "done" not in CLICKED[msg_id]:
-                        for row in msg.buttons:
-                            for btn in row:
-                                if "done" in (btn.text or "").lower():
-                                    await msg.click(text=btn.text)
-                                    CLICKED[msg_id].add("done")
-                                    print("[STEP 1] Done")
-                                    return
-
-        except Exception as e:
-            print("[ERROR]", e)
 # ========= FETCH =========
 async def fetch_task(user_id):
     idx, client = get_client()
+    if client is None:
+        return
 
     async with locks[idx]:
         print("[FETCH]", user_id)
@@ -214,9 +186,10 @@ async def fetch_task(user_id):
 
         msg = (await client.get_messages(SOURCE, limit=1))[0]
 
-        CLIENT_STATE[idx] = {
+        CLIENT_STATE[msg.id] = {
             "user_id": user_id,
-            "msg_id": msg.id
+            "client": idx,
+            "created": time.time()
         }
 
         print("[TRACK]", msg.id)
