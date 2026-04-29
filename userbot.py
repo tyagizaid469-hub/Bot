@@ -117,23 +117,27 @@ async def auto_handler(event):
         return
 
     msg_id = msg.id
-    text   = msg.text.lower()
+    text = msg.text.lower()
 
     if msg_id not in TASKS:
         return
 
     CLICKED.setdefault(msg_id, set())
-    btns = get_buttons(msg)   # list of lowercase button texts
 
     try:
-        # ── FINAL SAVE: Image 4 — Recovery email aaya ──
-        # Done button NAHI click karna, seedha DB save
+        # ===== DEBUG (optional) =====
+        if msg.buttons:
+            btn_texts = [btn.text for row in msg.buttons for btn in row]
+            print(f"[BTN][{msg_id}]", btn_texts)
+
+        # ===== FINAL SAVE =====
         if "recovery email" in text:
             first, last, email, password, recovery = parse_task(msg.text)
 
             if email:
                 con = db()
                 cur = con.cursor()
+
                 cur.execute("SELECT 1 FROM registrations WHERE email=?", (email,))
                 if not cur.fetchone():
                     cur.execute("""
@@ -152,38 +156,49 @@ async def auto_handler(event):
                         "fetched"
                     ))
                     con.commit()
-                    print(f"[SAVE] ✅ {email} | recovery={recovery}")
+                    print(f"[SAVE] ✅ {email}")
+
                 con.close()
 
             TASKS.pop(msg_id, None)
             CLICKED.pop(msg_id, None)
             return
 
-        # ── STEP 3: Image 3 — [!!CLICK AGAIN TO CONFIRM!!] ──
-        if "click again to confirm" in btns and "confirm" not in CLICKED[msg_id]:
-            if await click_button(msg, "click again to confirm"):
-                CLICKED[msg_id].add("confirm")
-                print(f"[STEP 3] ⚡ CLICK AGAIN TO CONFIRM {msg_id}")
-            return
+        # ===== STEP 3 =====
+        if "confirm" in text and "confirm" not in CLICKED[msg_id]:
+            if msg.buttons:
+                for row in msg.buttons:
+                    for btn in row:
+                        if "confirm" in (btn.text or "").lower():
+                            await msg.click(text=btn.text)
+                            CLICKED[msg_id].add("confirm")
+                            print(f"[STEP 3] confirm {msg_id}")
+                            return
 
-        # ── STEP 2: Image 2 — Complete ──
-        if "complete" in btns and "complete" not in CLICKED[msg_id]:
-            if await click_button(msg, "complete"):
-                CLICKED[msg_id].add("complete")
-                print(f"[STEP 2] ⚡ Complete {msg_id}")
-            return
+        # ===== STEP 2 =====
+        if "complete" in text and "complete" not in CLICKED[msg_id]:
+            if msg.buttons:
+                for row in msg.buttons:
+                    for btn in row:
+                        if "complete" in (btn.text or "").lower():
+                            await msg.click(text=btn.text)
+                            CLICKED[msg_id].add("complete")
+                            print(f"[STEP 2] complete {msg_id}")
+                            return
 
-        # ── STEP 1: Image 1 — Done (sirf ek baar, confirm state nahi honi chahiye) ──
-        if "done" in btns and "done" not in CLICKED[msg_id]:
-            if "click again to confirm" not in btns:
-                if await click_button(msg, "done"):
-                    CLICKED[msg_id].add("done")
-                    print(f"[STEP 1] ⚡ Done {msg_id}")
-            return
+        # ===== STEP 1 =====
+        if "email:" in text and "done" not in CLICKED[msg_id]:
+            if msg.buttons:
+                for row in msg.buttons:
+                    for btn in row:
+                        if "done" in (btn.text or "").lower():
+                            await msg.click(text=btn.text)
+                            CLICKED[msg_id].add("done")
+                            print(f"[STEP 1] done {msg_id}")
+                            return
 
     except Exception as e:
-        print(f"[ERROR] {msg_id} {e}")
-
+        print(f"[ERROR][{msg_id}] {e}")
 # ========= FETCH =========
 async def fetch_task(user_id):
     idx, client = get_client()
