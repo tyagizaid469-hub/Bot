@@ -18,9 +18,6 @@ SESSION_STRINGS = [
 ]
 SESSION_STRINGS = [s for s in SESSION_STRINGS if s]
 
-if not SESSION_STRINGS:
-    raise Exception("No sessions provided")
-
 clients = []
 locks = []
 
@@ -31,8 +28,8 @@ for s in SESSION_STRINGS:
 client_index = 0
 
 # ========= GLOBAL =========
-TASKS = {}
-CLICKED = {}
+CLIENT_STATE = {}   # msg_id -> {user_id, client, created}
+CLICKED = {}        # msg_id -> set() of clicked keywords
 
 # ========= DB =========
 def db():
@@ -50,7 +47,7 @@ def init_db():
         user_id INTEGER,
         first_name TEXT,
         last_name TEXT,
-        email TEXT UNIQUE,
+        email TEXT,
         password TEXT,
         recovery_email TEXT,
         task_id TEXT,
@@ -79,20 +76,11 @@ def init_db():
 # ========= HELPERS =========
 def get_client():
     global client_index
+    if not clients:
+        return None, None
     i = client_index % len(clients)
     client_index += 1
     return i, clients[i]
-
-def get_buttons(msg):
-    return [btn.text.lower() for row in (msg.buttons or []) for btn in row]
-
-async def click_button(msg, keyword):
-    for row in msg.buttons or []:
-        for btn in row:
-            if keyword in (btn.text or "").lower():
-                await msg.click(text=btn.text)
-                return True
-    return False
 
 # ========= PARSE =========
 def parse_task(text):
@@ -113,31 +101,27 @@ def parse_task(text):
 # ========= AUTO HANDLER =========
 async def auto_handler(event):
     msg = event.message
-    if not msg or not msg.text:
+    if not msg:
         return
 
     msg_id = msg.id
-    text = msg.text.lower()
+    text   = (msg.text or "").lower()
 
-    if msg_id not in TASKS:
+    task = CLIENT_STATE.get(msg_id)
+    if not task:
         return
 
     CLICKED.setdefault(msg_id, set())
+    clicked = CLICKED[msg_id]
 
     try:
-        # ===== DEBUG (optional) =====
-        if msg.buttons:
-            btn_texts = [btn.text for row in msg.buttons for btn in row]
-            print(f"[BTN][{msg_id}]", btn_texts)
-
-        # ===== FINAL SAVE =====
+        # ── FINAL SAVE: Recovery email aaya → DB save, Done skip ──
         if "recovery email" in text:
-            first, last, email, password, recovery = parse_task(msg.text)
+            first, last, email, password, recovery = parse_task(msg.text or "")
 
             if email:
                 con = db()
                 cur = con.cursor()
-
                 cur.execute("SELECT 1 FROM registrations WHERE email=?", (email,))
                 if not cur.fetchone():
                     cur.execute("""
@@ -147,76 +131,101 @@ async def auto_handler(event):
                     )
                     VALUES(?,?,?,?,?,?,?,?,?,?)
                     """, (
-                        TASKS[msg_id]["user_id"],
+                        task["user_id"],
                         first, last, email, password,
                         recovery,
-                        f"{TASKS[msg_id]['user_id']}_{msg_id}",
+                        f"{task['user_id']}_{msg_id}",
                         msg_id,
                         int(time.time()),
                         "fetched"
                     ))
                     con.commit()
-                    print(f"[SAVE] ✅ {email}")
-
+                    print(f"[SAVE] ✅ {email} | recovery={recovery}")
                 con.close()
 
-            TASKS.pop(msg_id, None)
+            CLIENT_STATE.pop(msg_id, None)
             CLICKED.pop(msg_id, None)
             return
 
-        # ===== STEP 3 =====
-        if "confirm" in text and "confirm" not in CLICKED[msg_id]:
-            if msg.buttons:
-                for row in msg.buttons:
-                    for btn in row:
-                        if "confirm" in (btn.text or "").lower():
-                            await msg.click(text=btn.text)
-                            CLICKED[msg_id].add("confirm")
-                            print(f"[STEP 3] confirm {msg_id}")
-                            return
+        # Buttons list (lowercase)
+        btns = [btn.text.lower() for row in (msg.buttons or []) for btn in row]
 
-        # ===== STEP 2 =====
-        if "complete" in text and "complete" not in CLICKED[msg_id]:
-            if msg.buttons:
-                for row in msg.buttons:
-                    for btn in row:
-                        if "complete" in (btn.text or "").lower():
-                            await msg.click(text=btn.text)
-                            CLICKED[msg_id].add("complete")
-                            print(f"[STEP 2] complete {msg_id}")
-                            return
+        # ── STEP 3: CLICK AGAIN TO CONFIRM ──
+        if "click again to confirm" in btns and "confirm" not in clicked:
+            for row in msg.buttons:
+                for btn in row:
+                    if "click again to confirm" in (btn.text or "").lower():
+                        await msg.click(text=btn.text)
+                        clicked.add("confirm")
+                        print(f"[STEP 3] ⚡ CLICK AGAIN TO CONFIRM {msg_id}")
+                        return
 
-        # ===== STEP 1 =====
-        if "email:" in text and "done" not in CLICKED[msg_id]:
-            if msg.buttons:
+        # ── STEP 2: Complete ──
+        if "complete" in btns and "complete" not in clicked:
+            for row in msg.buttons:
+                for btn in row:
+                    if "complete" in (btn.text or "").lower():
+                        await msg.click(text=btn.text)
+                        clicked.add("complete")
+                        print(f"[STEP 2] ⚡ Complete {msg_id}")
+                        return
+
+        # ── STEP 1: Done — sirf ek baar, confirm state nahi honi chahiye ──
+        if "done" in btns and "done" not in clicked:
+            if "click again to confirm" not in btns:
                 for row in msg.buttons:
                     for btn in row:
                         if "done" in (btn.text or "").lower():
                             await msg.click(text=btn.text)
-                            CLICKED[msg_id].add("done")
-                            print(f"[STEP 1] done {msg_id}")
+                            clicked.add("done")
+                            print(f"[STEP 1] ⚡ Done {msg_id}")
                             return
 
     except Exception as e:
-        print(f"[ERROR][{msg_id}] {e}")
+        print(f"[ERROR] {msg_id} {e}")
+
 # ========= FETCH =========
 async def fetch_task(user_id):
     idx, client = get_client()
+    if client is None:
+        return
 
     async with locks[idx]:
-        print(f"[FETCH] {user_id}")
+        print("[FETCH]", user_id)
+
         await client.send_message(SOURCE, "➕ Register a new Gmail")
-        await asyncio.sleep(1)
 
-        msg = (await client.get_messages(SOURCE, limit=1))[0]
+        # Source bot ka reply aane ka wait karo (Done button ke saath)
+        msg = None
+        for _ in range(20):  # max 10 sec
+            await asyncio.sleep(0.5)
+            msgs = await client.get_messages(SOURCE, limit=1)
+            if msgs and msgs[0].buttons:
+                msg = msgs[0]
+                break
 
-        TASKS[msg.id] = {
+        if not msg:
+            print("[FETCH] ❌ Source bot ne reply nahi kiya")
+            return
+
+        # Track karo
+        CLIENT_STATE[msg.id] = {
             "user_id": user_id,
             "client":  idx,
             "created": time.time()
         }
+        CLICKED.setdefault(msg.id, set())
 
-        print(f"[TRACK] {msg.id}")
+        print("[TRACK]", msg.id)
+
+        # ✅ Step 1: Done button yahi click karo — manually nahi karna padega
+        for row in msg.buttons or []:
+            for btn in row:
+                if "done" in (btn.text or "").lower():
+                    await msg.click(text=btn.text)
+                    CLICKED[msg.id].add("done")
+                    print("[STEP 1] ⚡ Done auto-clicked")
+                    return
 
 # ========= JOB LOOP =========
 async def job_loop():
@@ -257,16 +266,6 @@ async def job_loop():
             con.close()
             print("[JOB ERROR]", e)
 
-# ========= CLEANUP =========
-async def cleanup():
-    while True:
-        now = time.time()
-        for msg_id in list(TASKS.keys()):
-            if now - TASKS[msg_id]["created"] > 90:
-                TASKS.pop(msg_id, None)
-                CLICKED.pop(msg_id, None)
-        await asyncio.sleep(10)
-
 # ========= START =========
 async def main():
     init_db()
@@ -279,9 +278,8 @@ async def main():
             print(f"[READY] Client {i}")
 
     asyncio.create_task(job_loop())
-    asyncio.create_task(cleanup())
-
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
