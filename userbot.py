@@ -127,7 +127,7 @@ async def auto_handler(event):
 
     try:
         # ===== FINAL SAVE =====
-        if re.search(r"recovery email.*@gmail\.com", text):
+        if re.search(r"recovery email", text):
             first, last, email, password, recovery = parse_task(msg.text)
 
             if email:
