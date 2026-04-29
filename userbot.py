@@ -113,78 +113,95 @@ async def auto_handler(event):
     for idx, state in list(CLIENT_STATE.items()):
         msg_id = state["msg_id"]
 
-        # IMPORTANT: message edit same id hota hai
         if msg.id != msg_id:
             continue
 
+        CLICKED.setdefault(msg_id, set())
+
         try:
-            # ===== FINAL STEP (SAVE FIRST) =====
+            # =========================
+            # ✅ FINAL STEP (SAVE FIRST)
+            # =========================
             if "recovery email" in text:
                 first, last, email, password, recovery = parse_task(msg.text)
 
-                if recovery != "Not Provided":
+                if email and recovery != "Not Provided":
                     con = db()
                     cur = con.cursor()
 
-                    cur.execute("""
-                    INSERT INTO registrations(
-                        user_id, first_name, last_name, email, password,
-                        recovery_email, task_id, msg_id, created_at, state
-                    )
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
-                    """, (
-                        state["user_id"],
-                        first, last, email, password,
-                        recovery,
-                        f"{state['user_id']}_{msg.id}",
-                        msg.id,
-                        int(time.time()),
-                        "fetched"
-                    ))
+                    # duplicate avoid
+                    cur.execute("SELECT 1 FROM registrations WHERE email=?", (email,))
+                    if not cur.fetchone():
+                        cur.execute("""
+                        INSERT INTO registrations(
+                            user_id, first_name, last_name, email, password,
+                            recovery_email, task_id, msg_id, created_at, state
+                        )
+                        VALUES(?,?,?,?,?,?,?,?,?,?)
+                        """, (
+                            state["user_id"],
+                            first, last, email, password,
+                            recovery,
+                            f"{state['user_id']}_{msg.id}",
+                            msg.id,
+                            int(time.time()),
+                            "fetched"
+                        ))
 
-                    con.commit()
+                        con.commit()
+                        print("[SAVE] ✅", email, recovery)
+
                     con.close()
 
-                    print("[SAVE] ✅", email, recovery)
+                CLIENT_STATE.pop(idx, None)
+                CLICKED.pop(msg_id, None)
+                return
 
-                    del CLIENT_STATE[idx]
-                    CLICKED.clear()
-                    return
+            # =========================
+            # 🔥 BUTTON CONTROL (ORDER FIXED)
+            # =========================
+            if not msg.buttons:
+                return
 
-            # ===== BUTTON CLICK =====
-            if msg.buttons:
-                for row in msg.buttons:
-                    for btn in row:
-                        t = (btn.text or "").lower()
+            btn_texts = [btn.text.lower() for row in msg.buttons for btn in row]
 
-                        # ❌ FINAL DONE SKIP
-                        if "recovery email" in text and "done" in t:
-                            continue
+            # ===== STEP 3 → CONFIRM =====
+            if "click again to confirm" in " ".join(btn_texts):
+                if "confirm" not in CLICKED[msg_id]:
+                    for row in msg.buttons:
+                        for btn in row:
+                            if "confirm" in (btn.text or "").lower():
+                                await msg.click(text=btn.text)
+                                CLICKED[msg_id].add("confirm")
+                                print("[STEP 3] Confirm")
+                                return
 
-                        # STEP 1
-                        if "done" in t and f"{msg_id}_done" not in CLICKED:
-                            await msg.click(text=btn.text)
-                            CLICKED.add(f"{msg_id}_done")
-                            print("[STEP 1] Done")
-                            return
+            # ===== STEP 2 → COMPLETE =====
+            if "complete" in btn_texts:
+                if "complete" not in CLICKED[msg_id]:
+                    for row in msg.buttons:
+                        for btn in row:
+                            if "complete" in (btn.text or "").lower():
+                                await msg.click(text=btn.text)
+                                CLICKED[msg_id].add("complete")
+                                print("[STEP 2] Complete")
+                                return
 
-                        # STEP 2
-                        if "complete" in t and f"{msg_id}_complete" not in CLICKED:
-                            await msg.click(text=btn.text)
-                            CLICKED.add(f"{msg_id}_complete")
-                            print("[STEP 2] Complete")
-                            return
-
-                        # STEP 3
-                        if "confirm" in t and f"{msg_id}_confirm" not in CLICKED:
-                            await msg.click(text=btn.text)
-                            CLICKED.add(f"{msg_id}_confirm")
-                            print("[STEP 3] Confirm")
-                            return
+            # ===== STEP 1 → DONE =====
+            if "done" in btn_texts:
+                # important guard
+                if "click again to confirm" not in btn_texts:
+                    if "done" not in CLICKED[msg_id]:
+                        for row in msg.buttons:
+                            for btn in row:
+                                if "done" in (btn.text or "").lower():
+                                    await msg.click(text=btn.text)
+                                    CLICKED[msg_id].add("done")
+                                    print("[STEP 1] Done")
+                                    return
 
         except Exception as e:
             print("[ERROR]", e)
-
 # ========= FETCH =========
 async def fetch_task(user_id):
     idx, client = get_client()
