@@ -31,11 +31,12 @@ for s in SESSION_STRINGS:
 client_index = 0
 
 # ========= GLOBAL =========
-TASKS = {}        # msg_id -> task
-CLICKED = {}      # msg_id -> set()
+TASKS = {}
+CLICKED = {}
+
 # ========= DB =========
 def db():
-    con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+    con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     con.row_factory = sqlite3.Row
     return con
 
@@ -49,7 +50,7 @@ def init_db():
         user_id INTEGER,
         first_name TEXT,
         last_name TEXT,
-        email TEXT,
+        email TEXT UNIQUE,
         password TEXT,
         recovery_email TEXT,
         task_id TEXT,
@@ -108,14 +109,15 @@ def parse_task(text):
         password.group(1).strip() if password else "",
         recovery.group(1).strip() if recovery else "Not Provided"
     )
+
 # ========= AUTO HANDLER =========
 async def auto_handler(event):
     msg = event.message
-    if not msg:
+    if not msg or not msg.text:
         return
 
     msg_id = msg.id
-    text = (msg.text or "").lower()
+    text = msg.text.lower()
 
     if msg_id not in TASKS:
         return
@@ -125,8 +127,8 @@ async def auto_handler(event):
 
     try:
         # ===== FINAL SAVE =====
-        if re.search(r"recovery.*@gmail\.com", text):
-            email, password, recovery = parse(msg.text or "")
+        if re.search(r"recovery email.*@gmail\.com", text):
+            first, last, email, password, recovery = parse_task(msg.text)
 
             if email:
                 con = db()
@@ -135,12 +137,22 @@ async def auto_handler(event):
                 cur.execute("SELECT 1 FROM registrations WHERE email=?", (email,))
                 if not cur.fetchone():
                     cur.execute("""
-                    INSERT INTO registrations(email,password,recovery_email,msg_id,created_at,state)
-                    VALUES(?,?,?,?,?,?)
-                    """, (email, password, recovery, msg_id, int(time.time()), "fetched"))
-
+                    INSERT INTO registrations(
+                        user_id, first_name, last_name, email, password,
+                        recovery_email, task_id, msg_id, created_at, state
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """, (
+                        TASKS[msg_id]["user_id"],
+                        first, last, email, password,
+                        recovery,
+                        f"{TASKS[msg_id]['user_id']}_{msg_id}",
+                        msg_id,
+                        int(time.time()),
+                        "fetched"
+                    ))
                     con.commit()
-                    print(f"[SAVE] ✅ {email}")
+                    print(f"[SAVE] {email}")
 
                 con.close()
 
@@ -148,40 +160,37 @@ async def auto_handler(event):
             CLICKED.pop(msg_id, None)
             return
 
-        # ===== SKIP 2FA =====
-        if "enable 2fa" in btns:
-            print("[SKIP] 2FA ignored")
-
         # ===== STEP 3 =====
         if "click again to confirm" in btns and "confirm" not in CLICKED[msg_id]:
-            await click_button(msg, "confirm")
-            CLICKED[msg_id].add("confirm")
-            print("[STEP] confirm")
+            if await click_button(msg, "confirm"):
+                CLICKED[msg_id].add("confirm")
+                print(f"[STEP] confirm {msg_id}")
             return
 
         # ===== STEP 2 =====
         if "complete" in btns and "complete" not in CLICKED[msg_id]:
-            await click_button(msg, "complete")
-            CLICKED[msg_id].add("complete")
-            print("[STEP] complete")
+            if await click_button(msg, "complete"):
+                CLICKED[msg_id].add("complete")
+                print(f"[STEP] complete {msg_id}")
             return
 
         # ===== STEP 1 =====
         if "done" in btns and "done" not in CLICKED[msg_id]:
-            if "confirm" not in btns:
-                await click_button(msg, "done")
-                CLICKED[msg_id].add("done")
-                print("[STEP] done")
-                return
+            if "click again to confirm" not in btns:
+                if await click_button(msg, "done"):
+                    CLICKED[msg_id].add("done")
+                    print(f"[STEP] done {msg_id}")
+            return
 
     except Exception as e:
-        print("[ERROR]", e)
+        print(f"[ERROR] {msg_id} {e}")
 
 # ========= FETCH =========
 async def fetch_task(user_id):
     idx, client = get_client()
 
     async with locks[idx]:
+        print(f"[FETCH] {user_id}")
         await client.send_message(SOURCE, "➕ Register a new Gmail")
         await asyncio.sleep(1)
 
@@ -193,7 +202,7 @@ async def fetch_task(user_id):
             "created": time.time()
         }
 
-        print("[TRACK]", msg.id)
+        print(f"[TRACK] {msg.id}")
 
 # ========= JOB LOOP =========
 async def job_loop():
@@ -209,21 +218,27 @@ async def job_loop():
             await asyncio.sleep(1)
             continue
 
-        cur.execute("UPDATE jobs SET status='processing' WHERE id=?", (job[0],))
+        cur.execute("UPDATE jobs SET status='processing' WHERE id=?", (job["id"],))
         con.commit()
         con.close()
 
         try:
-            if job[2] == "fetch":
-                await fetch_task(job[1])
+            if job["job_type"] == "fetch":
+                await fetch_task(job["user_id"])
 
             con = db()
             cur = con.cursor()
-            cur.execute("UPDATE jobs SET status='done' WHERE id=?", (job[0],))
+            cur.execute("UPDATE jobs SET status='done' WHERE id=?", (job["id"],))
             con.commit()
             con.close()
 
         except Exception as e:
+            con = db()
+            cur = con.cursor()
+            cur.execute("UPDATE jobs SET status='failed', error=? WHERE id=?", (str(e), job["id"]))
+            con.commit()
+            con.close()
+
             print("[JOB ERROR]", e)
 
 # ========= CLEANUP =========
@@ -231,10 +246,9 @@ async def cleanup():
     while True:
         now = time.time()
         for msg_id in list(TASKS.keys()):
-            if now - TASKS[msg_id]["created"] > 60:
+            if now - TASKS[msg_id]["created"] > 90:
                 TASKS.pop(msg_id, None)
                 CLICKED.pop(msg_id, None)
-                print("[CLEAN] removed", msg_id)
         await asyncio.sleep(10)
 
 # ========= START =========
