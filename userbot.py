@@ -169,7 +169,7 @@ async def auto_handler(event):
                         print("[CLICK ERROR]", e)
 
         # 🔥 FINAL RESULT
-        if "email" in text and "password" in text:
+        if "add" in text and "recovery" in text:
             user_id = state["user_id"]
 
             first, last, email, password, recovery = parse_task(msg.text or "")
