@@ -27,14 +27,15 @@ for s in SESSION_STRINGS:
 
 client_index = 0
 
-# ========= GLOBAL =========
+# ========= GLOBAL STATE =========
 CLIENT_STATE = {}   # msg_id -> task info
-CLICKED = {}        # msg_id -> set()
+STEP_STATE = {}     # msg_id -> steps
+CLICKED = {}        # msg_id -> set
 
 # ========= DB =========
 def db():
     con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    con.row_factory = sqlite3.Row   # 🔥 IMPORTANT FIX
+    con.row_factory = sqlite3.Row
     return con
 
 def init_db():
@@ -80,7 +81,7 @@ def get_client():
     client_index += 1
     return i, clients[i]
 
-# ========= PARSER =========
+# ========= PARSE =========
 def parse_task(text):
     email = re.search(r'Email:\s*([^\n]+)', text)
     password = re.search(r'Password:\s*([^\n]+)', text)
@@ -96,24 +97,31 @@ def parse_task(text):
         recovery.group(1).strip() if recovery else "Not Provided"
     )
 
-# ========= CLICK ENGINE =========
+# ========= SAFE CLICK =========
 async def click(msg, msg_id, keyword):
-    if not msg.buttons:
+    try:
+        msg = await msg.client.get_messages(SOURCE, ids=msg_id)
+
+        if not msg.buttons:
+            return False
+
+        CLICKED.setdefault(msg_id, set())
+
+        for row in msg.buttons:
+            for btn in row:
+                t = (btn.text or "").lower()
+
+                if keyword in t and keyword not in CLICKED[msg_id]:
+                    await msg.click(text=btn.text)
+                    CLICKED[msg_id].add(keyword)
+                    print(f"[CLICK] {keyword} | {msg_id}")
+                    return True
+
         return False
 
-    CLICKED.setdefault(msg_id, set())
-
-    for row in msg.buttons:
-        for btn in row:
-            t = (btn.text or "").lower()
-
-            if keyword in t and keyword not in CLICKED[msg_id]:
-                await msg.click(text=btn.text)
-                CLICKED[msg_id].add(keyword)
-                print(f"[CLICK] {keyword} | {msg_id}")
-                return True
-
-    return False
+    except Exception as e:
+        print("[CLICK ERROR]", e)
+        return False
 
 # ========= HANDLER =========
 async def handler(event):
@@ -122,17 +130,22 @@ async def handler(event):
         return
 
     msg_id = msg.id
-    text = (msg.text or "").lower()
-
     task = CLIENT_STATE.get(msg_id)
     if not task:
         return
 
     try:
-        # refresh latest message (IMPORTANT)
+        # 🔥 ALWAYS FRESH MESSAGE
         msg = await event.client.get_messages(SOURCE, ids=msg_id)
+        text = (msg.text or "").lower()
 
-        # ===== SAVE =====
+        STEP_STATE.setdefault(msg_id, {
+            "done": False,
+            "complete": False,
+            "confirm": False
+        })
+
+        # ========= SAVE =========
         if "recovery email" in text:
             first, last, email, password, recovery = parse_task(msg.text or "")
 
@@ -162,16 +175,28 @@ async def handler(event):
                 print("[SAVE] ✅", email)
 
                 CLIENT_STATE.pop(msg_id, None)
+                STEP_STATE.pop(msg_id, None)
                 CLICKED.pop(msg_id, None)
                 return
 
-        # ===== BUTTON FLOW =====
-        await click(msg, msg_id, "done")
-        await click(msg, msg_id, "complete")
-        await click(msg, msg_id, "confirm")
+        # ========= BUTTON FLOW =========
+        if not STEP_STATE[msg_id]["done"]:
+            if await click(msg, msg_id, "done"):
+                STEP_STATE[msg_id]["done"] = True
+                return
+
+        if STEP_STATE[msg_id]["done"] and not STEP_STATE[msg_id]["complete"]:
+            if await click(msg, msg_id, "complete"):
+                STEP_STATE[msg_id]["complete"] = True
+                return
+
+        if STEP_STATE[msg_id]["complete"] and not STEP_STATE[msg_id]["confirm"]:
+            if await click(msg, msg_id, "confirm"):
+                STEP_STATE[msg_id]["confirm"] = True
+                return
 
     except Exception as e:
-        print("[ERROR]", e)
+        print("[ERROR]", msg_id, e)
 
 # ========= FETCH =========
 async def fetch_task(user_id):
@@ -191,7 +216,7 @@ async def fetch_task(user_id):
 
         print("[TRACK]", msg.id)
 
-# ========= JOB LOOP (FIXED CRASH) =========
+# ========= JOB LOOP =========
 async def job_loop():
     while True:
         con = db()
@@ -205,7 +230,6 @@ async def job_loop():
             await asyncio.sleep(1)
             continue
 
-        # 🔥 FIX: tuple safety
         job_id = job["id"]
 
         cur.execute("UPDATE jobs SET status='processing' WHERE id=?", (job_id,))
