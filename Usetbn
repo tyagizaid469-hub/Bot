@@ -33,10 +33,11 @@ client_index = 0
 # ========= GLOBAL =========
 TASKS = {}        # msg_id -> task
 CLICKED = {}      # msg_id -> set()
-
 # ========= DB =========
 def db():
-    return sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    return con
 
 def init_db():
     con = db()
@@ -46,9 +47,12 @@ def init_db():
     CREATE TABLE IF NOT EXISTS registrations(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
-        email TEXT UNIQUE,
+        first_name TEXT,
+        last_name TEXT,
+        email TEXT,
         password TEXT,
         recovery_email TEXT,
+        task_id TEXT,
         msg_id INTEGER,
         created_at INTEGER,
         state TEXT
@@ -58,10 +62,13 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS jobs(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        job_type TEXT,
-        payload TEXT,
-        status TEXT DEFAULT 'pending'
+        user_id INTEGER NOT NULL,
+        job_type TEXT NOT NULL,
+        payload TEXT DEFAULT '',
+        status TEXT DEFAULT 'pending',
+        created_at INTEGER,
+        updated_at INTEGER,
+        error TEXT DEFAULT ''
     )
     """)
 
