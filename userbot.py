@@ -32,7 +32,7 @@ client_index = 0
 
 # ========= GLOBAL =========
 CLIENT_STATE = {}   # idx -> {user_id, msg_id}
-CLICKED = set()
+CLICKED = {}
 
 # ========= DB =========
 def db():
