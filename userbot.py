@@ -33,7 +33,9 @@ CLICKED = {}        # msg_id -> set()
 
 # ========= DB =========
 def db():
-    return sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    con.row_factory = sqlite3.Row   # 🔥 IMPORTANT FIX
+    return con
 
 def init_db():
     con = db()
@@ -60,11 +62,11 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         job_type TEXT,
-        payload TEXT DEFAULT '',
-        status TEXT DEFAULT 'pending',
+        payload TEXT,
+        status TEXT,
         created_at INTEGER,
         updated_at INTEGER,
-        error TEXT DEFAULT ''
+        error TEXT
     )
     """)
 
@@ -74,14 +76,11 @@ def init_db():
 # ========= CLIENT =========
 def get_client():
     global client_index
-    if not clients:
-        return None, None
-
     i = client_index % len(clients)
     client_index += 1
     return i, clients[i]
 
-# ========= PARSE =========
+# ========= PARSER =========
 def parse_task(text):
     email = re.search(r'Email:\s*([^\n]+)', text)
     password = re.search(r'Password:\s*([^\n]+)', text)
@@ -130,10 +129,10 @@ async def handler(event):
         return
 
     try:
-        # 🔥 REFRESH MESSAGE (IMPORTANT)
+        # refresh latest message (IMPORTANT)
         msg = await event.client.get_messages(SOURCE, ids=msg_id)
 
-        # ========= SAVE =========
+        # ===== SAVE =====
         if "recovery email" in text:
             first, last, email, password, recovery = parse_task(msg.text or "")
 
@@ -154,7 +153,7 @@ async def handler(event):
                     f"{task['user_id']}_{msg_id}",
                     msg_id,
                     int(time.time()),
-                    "fetched"
+                    "done"
                 ))
 
                 con.commit()
@@ -166,7 +165,7 @@ async def handler(event):
                 CLICKED.pop(msg_id, None)
                 return
 
-        # ========= BUTTON FLOW =========
+        # ===== BUTTON FLOW =====
         await click(msg, msg_id, "done")
         await click(msg, msg_id, "complete")
         await click(msg, msg_id, "confirm")
@@ -177,8 +176,6 @@ async def handler(event):
 # ========= FETCH =========
 async def fetch_task(user_id):
     idx, client = get_client()
-    if client is None:
-        return
 
     async with locks[idx]:
         await client.send_message(SOURCE, "➕ Register a new Gmail")
@@ -189,12 +186,12 @@ async def fetch_task(user_id):
         CLIENT_STATE[msg.id] = {
             "user_id": user_id,
             "client": idx,
-            "created": time.time()
+            "time": time.time()
         }
 
         print("[TRACK]", msg.id)
 
-# ========= JOB LOOP (FIXED) =========
+# ========= JOB LOOP (FIXED CRASH) =========
 async def job_loop():
     while True:
         con = db()
@@ -208,7 +205,10 @@ async def job_loop():
             await asyncio.sleep(1)
             continue
 
-        cur.execute("UPDATE jobs SET status='processing' WHERE id=?", (job["id"],))
+        # 🔥 FIX: tuple safety
+        job_id = job["id"]
+
+        cur.execute("UPDATE jobs SET status='processing' WHERE id=?", (job_id,))
         con.commit()
         con.close()
 
@@ -218,7 +218,7 @@ async def job_loop():
 
             con = db()
             cur = con.cursor()
-            cur.execute("UPDATE jobs SET status='done' WHERE id=?", (job["id"],))
+            cur.execute("UPDATE jobs SET status='done' WHERE id=?", (job_id,))
             con.commit()
             con.close()
 
@@ -236,7 +236,7 @@ async def main():
             c.add_event_handler(handler, events.MessageEdited(from_users=SOURCE))
             print(f"[READY] Client {i}")
 
-    asyncio.create_task(job_loop())  # 🔥 FIXED (missing before)
+    asyncio.create_task(job_loop())
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
