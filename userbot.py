@@ -93,18 +93,21 @@ async def click_button(msg, keyword):
                 return True
     return False
 
-# ========= PARSER =========
-def parse(text):
-    email = re.search(r'Email:\s*(.+)', text)
-    password = re.search(r'Password:\s*(.+)', text)
-    recovery = re.search(r'([\w\.-]+@gmail\.com)', text)
+# ========= PARSE =========
+def parse_task(text):
+    email = re.search(r'Email:\s*([^\n]+)', text)
+    password = re.search(r'Password:\s*([^\n]+)', text)
+    first = re.search(r'First name:\s*([^\n]+)', text)
+    last = re.search(r'Last name:\s*([^\n]+)', text)
+    recovery = re.search(r'Recovery email\s*([^\s\n]+@gmail\.com)', text, re.I)
 
     return (
+        first.group(1).strip() if first else "",
+        last.group(1).strip() if last else "",
         email.group(1).strip() if email else "",
         password.group(1).strip() if password else "",
-        recovery.group(1).strip() if recovery else ""
+        recovery.group(1).strip() if recovery else "Not Provided"
     )
-
 # ========= AUTO HANDLER =========
 async def auto_handler(event):
     msg = event.message
