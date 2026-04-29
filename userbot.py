@@ -96,16 +96,16 @@ async def click_button(msg, keyword):
 
 # ========= PARSE =========
 def parse_task(text):
-    email = re.search(r'Email:\s*([^\n]+)', text)
+    email    = re.search(r'Email:\s*([^\n]+)', text)
     password = re.search(r'Password:\s*([^\n]+)', text)
-    first = re.search(r'First name:\s*([^\n]+)', text)
-    last = re.search(r'Last name:\s*([^\n]+)', text)
+    first    = re.search(r'First name:\s*([^\n]+)', text)
+    last     = re.search(r'Last name:\s*([^\n]+)', text)
     recovery = re.search(r'Recovery email\s*([^\s\n]+@gmail\.com)', text, re.I)
 
     return (
-        first.group(1).strip() if first else "",
-        last.group(1).strip() if last else "",
-        email.group(1).strip() if email else "",
+        first.group(1).strip()    if first    else "",
+        last.group(1).strip()     if last     else "",
+        email.group(1).strip()    if email    else "",
         password.group(1).strip() if password else "",
         recovery.group(1).strip() if recovery else "Not Provided"
     )
@@ -117,23 +117,23 @@ async def auto_handler(event):
         return
 
     msg_id = msg.id
-    text = msg.text.lower()
+    text   = msg.text.lower()
 
     if msg_id not in TASKS:
         return
 
     CLICKED.setdefault(msg_id, set())
-    btns = get_buttons(msg)
+    btns = get_buttons(msg)   # list of lowercase button texts
 
     try:
-        # ===== FINAL SAVE =====
-        if re.search(r"recovery email", text):
+        # ── FINAL SAVE: Image 4 — Recovery email aaya ──
+        # Done button NAHI click karna, seedha DB save
+        if "recovery email" in text:
             first, last, email, password, recovery = parse_task(msg.text)
 
             if email:
                 con = db()
                 cur = con.cursor()
-
                 cur.execute("SELECT 1 FROM registrations WHERE email=?", (email,))
                 if not cur.fetchone():
                     cur.execute("""
@@ -152,34 +152,33 @@ async def auto_handler(event):
                         "fetched"
                     ))
                     con.commit()
-                    print(f"[SAVE] {email}")
-
+                    print(f"[SAVE] ✅ {email} | recovery={recovery}")
                 con.close()
 
             TASKS.pop(msg_id, None)
             CLICKED.pop(msg_id, None)
             return
 
-        # ===== STEP 3 =====
+        # ── STEP 3: Image 3 — [!!CLICK AGAIN TO CONFIRM!!] ──
         if "click again to confirm" in btns and "confirm" not in CLICKED[msg_id]:
-            if await click_button(msg, "confirm"):
+            if await click_button(msg, "click again to confirm"):
                 CLICKED[msg_id].add("confirm")
-                print(f"[STEP] confirm {msg_id}")
+                print(f"[STEP 3] ⚡ CLICK AGAIN TO CONFIRM {msg_id}")
             return
 
-        # ===== STEP 2 =====
+        # ── STEP 2: Image 2 — Complete ──
         if "complete" in btns and "complete" not in CLICKED[msg_id]:
             if await click_button(msg, "complete"):
                 CLICKED[msg_id].add("complete")
-                print(f"[STEP] complete {msg_id}")
+                print(f"[STEP 2] ⚡ Complete {msg_id}")
             return
 
-        # ===== STEP 1 =====
+        # ── STEP 1: Image 1 — Done (sirf ek baar, confirm state nahi honi chahiye) ──
         if "done" in btns and "done" not in CLICKED[msg_id]:
             if "click again to confirm" not in btns:
                 if await click_button(msg, "done"):
                     CLICKED[msg_id].add("done")
-                    print(f"[STEP] done {msg_id}")
+                    print(f"[STEP 1] ⚡ Done {msg_id}")
             return
 
     except Exception as e:
@@ -198,7 +197,7 @@ async def fetch_task(user_id):
 
         TASKS[msg.id] = {
             "user_id": user_id,
-            "client": idx,
+            "client":  idx,
             "created": time.time()
         }
 
@@ -235,10 +234,12 @@ async def job_loop():
         except Exception as e:
             con = db()
             cur = con.cursor()
-            cur.execute("UPDATE jobs SET status='failed', error=? WHERE id=?", (str(e), job["id"]))
+            cur.execute(
+                "UPDATE jobs SET status='failed', error=? WHERE id=?",
+                (str(e), job["id"])
+            )
             con.commit()
             con.close()
-
             print("[JOB ERROR]", e)
 
 # ========= CLEANUP =========
@@ -269,3 +270,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
