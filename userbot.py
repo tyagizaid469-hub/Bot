@@ -128,7 +128,6 @@ def clean_value(v):
     v = v.strip()
     v = v.strip("'").strip('"')
     v = re.sub(r"\s+", " ", v)
-
     return v.strip()
 
 def parse_task(text):
@@ -280,23 +279,25 @@ async def auto_handler(event):
         return
 
     try:
-        # Save when final recovery step appears
-if "you need to add recovery email" in text:
 
-    data = parse_task(msg.text)
+        # Save only final recovery step
+        if "you need to add recovery email" in text:
 
-    if data["recovery_email"] and data["email"]:
-        await save_registration(
-            task["user_id"],
-            msg_id,
-            data
-        )
+            data = parse_task(msg.text)
 
-        logging.info(f"Saved {data['recovery_email']}")
+            if data["recovery_email"] and data["email"]:
 
-        CLIENT_STATE.pop(msg_id, None)
-        CLICKED.pop(msg_id, None)
-        return
+                await save_registration(
+                    task["user_id"],
+                    msg_id,
+                    data
+                )
+
+                logging.info(f"Saved {data['recovery_email']}")
+
+                CLIENT_STATE.pop(msg_id, None)
+                CLICKED.pop(msg_id, None)
+                return
 
         # Busy retry
         if "server busy" in text or "5 sec" in text:
@@ -341,10 +342,7 @@ async def fetch_task(user_id):
                 timeout=30
             ) as conv:
 
-                await conv.send_message(
-                    "➕ Register a new Gmail"
-                )
-
+                await conv.send_message("➕ Register a new Gmail")
                 msg = await conv.get_response()
 
             CLIENT_STATE[msg.id] = {
