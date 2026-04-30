@@ -3526,10 +3526,10 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # =========================
     msg_text = (
         "Register account using the specified data and get from ₹20 to ₹22$\n\n"
-        f"First name: `{name}`\n"
-        f"Last name: ✖️\n"
-        f"Email: `{email}`\n"
-        f"Password: `{password}`\n\n"
+        f"First name: `{name}`"
+        f"Last name: ✖️"
+        f"Email: `{email}`"
+        f"Password: `{password}`\n"
         "🔐 Be sure to use the specified data, otherwise the account will not be paid.\n"
         "______________________________\n\n"
         f"🚦 You need to add Recovery email  `{recovery_email}`"
@@ -4057,7 +4057,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             first_name = _safe_code(r["first_name"] if r else "")
             last_name  = _safe_code(r["last_name"] if r else "")
-            name = (first_name + " " + last_name).strip()
            
             email = _safe_code(r["email"] if r else "")
             password = _safe_code(r["password"] if r else "")
@@ -4065,9 +4064,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             base_text = (
                 "Register account using the specified\n"
                 "data and get from ₹20 to ₹22\n\n"
-                f"Name: `{name}`\n\n"
-                f"Email: `{email}`\n\n"
-                f"Password: `{password}`\n\n"
+                f"Name: `{first_name}`\n"
+                f"Last name: `{last_name}`\n"
+                f"Email: `{email}`\n"
+                f"Password: `{password}`\n"
                 "🔐 Be sure to use the specified data,\n"
                 "otherwise the account will not be paid\n"
                 "=========================\n"
@@ -4135,9 +4135,10 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             base_text = (
                 "Register account using the specified\n"
                 "data and get from ₹20 to ₹22\n\n"
-                f"Name: `{name}`\n\n"
-                f"Email: `{email}`\n\n"
-                f"Password: `{password}`\n\n"
+                f"Name: `{first_name}`\n"
+                f"Last name: `{last_name}`\n"
+                f"Email: `{email}`\n"
+                f"Password: `{password}`\n"
                 "🔐 Be sure to use the specified data,\n"
                 "otherwise the account will not be paid\n"
                 "=========================\n"
@@ -4367,7 +4368,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     first_name = _safe_code(r["first_name"] if r else "")
     last_name  = _safe_code(r["last_name"] if r else "")
-    name = (first_name + " " + last_name).strip()
 
     email = _safe_code(r["email"] if r else "")
     password = _safe_code(r["password"] if r else "")
@@ -4378,7 +4378,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_form_row(
             int(a["reg_id"]),
             int(user.id),
-            name,
+            fitst_name,
             email,
             password,
             recovery_email,
@@ -4390,7 +4390,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     base_text = tr(
         user.id,
         "register_template",
-        name=name,
+        first_name=first_name,
         email=email,
         password=password,
         recovery_email=recovery_email,
