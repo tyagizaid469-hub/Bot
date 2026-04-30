@@ -1,267 +1,437 @@
+# ==========================================================
+# PROFESSIONAL TELEGRAM MULTI-SESSION AUTO BOT
+# Rewritten Stable Version
+# Requirements:
+# pip install telethon aiosqlite
+# ==========================================================
+
 import os
+import re
 import time
 import asyncio
-import sqlite3
-import re
+import logging
+import aiosqlite
+
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-# ========= CONFIG =========
-api_id = 36180474
-api_hash = "1f4ecc2133837a8a3c307f676cb95f88"
-SOURCE = "@GmailFarmerBot"
+# ==========================================================
+# CONFIG
+# ==========================================================
+
+API_ID = 36180474
+API_HASH = "1f4ecc2133837a8a3c307f676cb95f88"
+
+SOURCE_BOT = "@GmailFarmerBot"
 DB_PATH = "bot.db"
 
 SESSION_STRINGS = [
     (os.getenv("SESSION5") or "").strip(),
     (os.getenv("SESSION6") or "").strip(),
 ]
-SESSION_STRINGS = [s for s in SESSION_STRINGS if s]
+
+SESSION_STRINGS = [x for x in SESSION_STRINGS if x]
+
+FETCH_DELAY = 1
+JOB_LOOP_DELAY = 1
+TIMEOUT_CLEANUP = 300
+
+# ==========================================================
+# LOGGING
+# ==========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+# ==========================================================
+# GLOBALS
+# ==========================================================
 
 clients = []
 locks = []
 
-for s in SESSION_STRINGS:
-    clients.append(TelegramClient(StringSession(s), api_id, api_hash))
-    locks.append(asyncio.Lock())
-
 client_index = 0
 
-# ========= GLOBAL STATE =========
-CLIENT_STATE = {}   # msg_id -> task info
-STEP_STATE = {}     # msg_id -> steps
-CLICKED = {}        # msg_id -> set
+# message_id -> task info
+CLIENT_STATE = {}
 
-# ========= DB =========
-def db():
-    con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
-    con.row_factory = sqlite3.Row
-    return con
+# message_id -> clicked keywords
+CLICKED = {}
 
-def init_db():
-    con = db()
-    cur = con.cursor()
+# ==========================================================
+# DATABASE
+# ==========================================================
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS registrations(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        first_name TEXT,
-        last_name TEXT,
-        email TEXT,
-        password TEXT,
-        recovery_email TEXT,
-        task_id TEXT,
-        msg_id INTEGER,
-        created_at INTEGER,
-        state TEXT
-    )
-    """)
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS jobs(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        job_type TEXT,
-        payload TEXT,
-        status TEXT,
-        created_at INTEGER,
-        updated_at INTEGER,
-        error TEXT
-    )
-    """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS registrations(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            first_name TEXT,
+            last_name TEXT,
+            email TEXT,
+            password TEXT,
+            recovery_email TEXT,
+            task_id TEXT,
+            msg_id INTEGER,
+            created_at INTEGER,
+            state TEXT
+        )
+        """)
 
-    con.commit()
-    con.close()
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS jobs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            job_type TEXT NOT NULL,
+            payload TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            created_at INTEGER,
+            updated_at INTEGER,
+            error TEXT DEFAULT ''
+        )
+        """)
 
-# ========= CLIENT =========
-def get_client():
+        await db.commit()
+
+# ==========================================================
+# HELPERS
+# ==========================================================
+
+def get_next_client():
     global client_index
-    i = client_index % len(clients)
+
+    if not clients:
+        return None, None
+
+    idx = client_index % len(clients)
     client_index += 1
-    return i, clients[i]
 
-# ========= PARSE =========
-def parse_task(text):
-    email = re.search(r'Email:\s*([^\n]+)', text)
-    password = re.search(r'Password:\s*([^\n]+)', text)
-    first = re.search(r'First name:\s*([^\n]+)', text)
-    last = re.search(r'Last name:\s*([^\n]+)', text)
-    recovery = re.search(r'Recovery email\s*([^\s\n]+)', text, re.I)
+    return idx, clients[idx]
 
-    return (
-        first.group(1).strip() if first else "",
-        last.group(1).strip() if last else "",
-        email.group(1).strip() if email else "",
-        password.group(1).strip() if password else "",
-        recovery.group(1).strip() if recovery else "Not Provided"
-    )
+# ==========================================================
+# PARSER
+# ==========================================================
 
-# ========= SAFE CLICK =========
-async def click(msg, msg_id, keyword):
-    try:
-        msg = await msg.client.get_messages(SOURCE, ids=msg_id)
+def parse_task(text: str):
+    first = re.search(r'First name:\s*(.+)', text)
+    last = re.search(r'Last name:\s*(.+)', text)
+    email = re.search(r'Email:\s*(.+)', text)
+    password = re.search(r'Password:\s*(.+)', text)
+    recovery = re.search(r'Recovery email:\s*(.+)', text)
 
-        if not msg.buttons:
-            return False
+    return {
+        "first_name": first.group(1).strip() if first else "",
+        "last_name": last.group(1).strip() if last else "",
+        "email": email.group(1).strip() if email else "",
+        "password": password.group(1).strip() if password else "",
+        "recovery_email": recovery.group(1).strip() if recovery else "Not Provided",
+    }
 
-        CLICKED.setdefault(msg_id, set())
+# ==========================================================
+# BUTTON CLICKER
+# ==========================================================
 
-        for row in msg.buttons:
-            for btn in row:
-                t = (btn.text or "").lower()
+async def click_button(msg, keyword: str):
 
-                if keyword in t and keyword not in CLICKED[msg_id]:
+    if not msg.buttons:
+        return False
+
+    msg_id = msg.id
+    CLICKED.setdefault(msg_id, set())
+
+    for row in msg.buttons:
+        for btn in row:
+
+            text = (btn.text or "").lower()
+
+            if keyword in text and keyword not in CLICKED[msg_id]:
+                try:
                     await msg.click(text=btn.text)
                     CLICKED[msg_id].add(keyword)
-                    print(f"[CLICK] {keyword} | {msg_id}")
+
+                    logging.info(f"Clicked '{keyword}' | Msg {msg_id}")
                     return True
 
-        return False
+                except Exception as e:
+                    logging.error(f"Button click failed: {e}")
 
-    except Exception as e:
-        print("[CLICK ERROR]", e)
-        return False
+    return False
 
-# ========= HANDLER =========
-async def handler(event):
+# ==========================================================
+# SAVE RESULT
+# ==========================================================
+
+async def save_registration(user_id, msg_id, data):
+
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        await db.execute("""
+        INSERT INTO registrations(
+            user_id,
+            first_name,
+            last_name,
+            email,
+            password,
+            recovery_email,
+            task_id,
+            msg_id,
+            created_at,
+            state
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            data["first_name"],
+            data["last_name"],
+            data["email"],
+            data["password"],
+            data["recovery_email"],
+            f"{user_id}_{msg_id}",
+            msg_id,
+            int(time.time()),
+            "fetched"
+        ))
+
+        await db.commit()
+
+# ==========================================================
+# AUTO HANDLER
+# ==========================================================
+
+async def auto_handler(event):
+
     msg = event.message
     if not msg:
         return
 
     msg_id = msg.id
+    text = (msg.text or "").lower()
+
     task = CLIENT_STATE.get(msg_id)
+
     if not task:
         return
 
     try:
-        # 🔥 ALWAYS FRESH MESSAGE
-        msg = await event.client.get_messages(SOURCE, ids=msg_id)
-        text = (msg.text or "").lower()
+        # FINAL DATA DETECTED
+        if "email:" in text and "password:" in text:
 
-        STEP_STATE.setdefault(msg_id, {
-            "done": False,
-            "complete": False,
-            "confirm": False
-        })
+            parsed = parse_task(msg.text)
 
-        # ========= SAVE =========
-        if "recovery email" in text:
-            first, last, email, password, recovery = parse_task(msg.text or "")
+            if parsed["email"]:
 
-            if email:
-                con = db()
-                cur = con.cursor()
-
-                cur.execute("""
-                INSERT INTO registrations(
-                    user_id, first_name, last_name, email, password,
-                    recovery_email, task_id, msg_id, created_at, state
-                )
-                VALUES(?,?,?,?,?,?,?,?,?,?)
-                """, (
+                await save_registration(
                     task["user_id"],
-                    first, last, email, password,
-                    recovery,
-                    f"{task['user_id']}_{msg_id}",
                     msg_id,
-                    int(time.time()),
-                    "done"
-                ))
+                    parsed
+                )
 
-                con.commit()
-                con.close()
-
-                print("[SAVE] ✅", email)
+                logging.info(f"Saved: {parsed['email']}")
 
                 CLIENT_STATE.pop(msg_id, None)
-                STEP_STATE.pop(msg_id, None)
                 CLICKED.pop(msg_id, None)
                 return
 
-        # ========= BUTTON FLOW =========
-        if not STEP_STATE[msg_id]["done"]:
-            if await click(msg, msg_id, "done"):
-                STEP_STATE[msg_id]["done"] = True
-                return
-
-        if STEP_STATE[msg_id]["done"] and not STEP_STATE[msg_id]["complete"]:
-            if await click(msg, msg_id, "complete"):
-                STEP_STATE[msg_id]["complete"] = True
-                return
-
-        if STEP_STATE[msg_id]["complete"] and not STEP_STATE[msg_id]["confirm"]:
-            if await click(msg, msg_id, "confirm"):
-                STEP_STATE[msg_id]["confirm"] = True
-                return
+        # BUTTON FLOW
+        await click_button(msg, "done")
+        await click_button(msg, "complete")
+        await click_button(msg, "confirm")
+        await click_button(msg, "next")
 
     except Exception as e:
-        print("[ERROR]", msg_id, e)
+        logging.error(f"AUTO HANDLER ERROR: {e}")
 
-# ========= FETCH =========
+# ==========================================================
+# FETCH TASK
+# ==========================================================
+
 async def fetch_task(user_id):
-    idx, client = get_client()
+
+    idx, client = get_next_client()
+
+    if client is None:
+        logging.warning("No active clients.")
+        return
 
     async with locks[idx]:
-        await client.send_message(SOURCE, "➕ Register a new Gmail")
-        await asyncio.sleep(1)
-
-        msg = (await client.get_messages(SOURCE, limit=1))[0]
-
-        CLIENT_STATE[msg.id] = {
-            "user_id": user_id,
-            "client": idx,
-            "time": time.time()
-        }
-
-        print("[TRACK]", msg.id)
-
-# ========= JOB LOOP =========
-async def job_loop():
-    while True:
-        con = db()
-        cur = con.cursor()
-
-        cur.execute("SELECT * FROM jobs WHERE status='pending' LIMIT 1")
-        job = cur.fetchone()
-
-        if not job:
-            con.close()
-            await asyncio.sleep(1)
-            continue
-
-        job_id = job["id"]
-
-        cur.execute("UPDATE jobs SET status='processing' WHERE id=?", (job_id,))
-        con.commit()
-        con.close()
 
         try:
+            logging.info(f"Fetching task for user {user_id}")
+
+            await client.send_message(
+                SOURCE_BOT,
+                "➕ Register a new Gmail"
+            )
+
+            await asyncio.sleep(FETCH_DELAY)
+
+            msg = await client.get_response(SOURCE_BOT)
+
+            CLIENT_STATE[msg.id] = {
+                "user_id": user_id,
+                "client": idx,
+                "created": time.time()
+            }
+
+            logging.info(f"Tracking Msg ID {msg.id}")
+
+        except Exception as e:
+            logging.error(f"FETCH ERROR: {e}")
+
+# ==========================================================
+# JOB LOOP
+# ==========================================================
+
+async def job_loop():
+
+    while True:
+
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+
+                db.row_factory = aiosqlite.Row
+
+                cur = await db.execute("""
+                SELECT * FROM jobs
+                WHERE status='pending'
+                ORDER BY id ASC
+                LIMIT 1
+                """)
+
+                job = await cur.fetchone()
+
+                if not job:
+                    await asyncio.sleep(JOB_LOOP_DELAY)
+                    continue
+
+                await db.execute("""
+                UPDATE jobs
+                SET status='processing',
+                    updated_at=?
+                WHERE id=?
+                """, (
+                    int(time.time()),
+                    job["id"]
+                ))
+
+                await db.commit()
+
+            # PROCESS JOB
             if job["job_type"] == "fetch":
                 await fetch_task(job["user_id"])
 
-            con = db()
-            cur = con.cursor()
-            cur.execute("UPDATE jobs SET status='done' WHERE id=?", (job_id,))
-            con.commit()
-            con.close()
+            # MARK DONE
+            async with aiosqlite.connect(DB_PATH) as db:
+
+                await db.execute("""
+                UPDATE jobs
+                SET status='done',
+                    updated_at=?
+                WHERE id=?
+                """, (
+                    int(time.time()),
+                    job["id"]
+                ))
+
+                await db.commit()
 
         except Exception as e:
-            print("[JOB ERROR]", e)
+            logging.error(f"JOB LOOP ERROR: {e}")
+            await asyncio.sleep(2)
 
-# ========= START =========
+# ==========================================================
+# CLEANUP LOOP
+# ==========================================================
+
+async def cleanup_loop():
+
+    while True:
+
+        now = time.time()
+
+        remove = []
+
+        for msg_id, data in CLIENT_STATE.items():
+
+            if now - data["created"] > TIMEOUT_CLEANUP:
+                remove.append(msg_id)
+
+        for msg_id in remove:
+            CLIENT_STATE.pop(msg_id, None)
+            CLICKED.pop(msg_id, None)
+
+            logging.info(f"Cleaned timeout msg {msg_id}")
+
+        await asyncio.sleep(30)
+
+# ==========================================================
+# START CLIENTS
+# ==========================================================
+
+async def start_clients():
+
+    for i, session in enumerate(SESSION_STRINGS):
+
+        try:
+            client = TelegramClient(
+                StringSession(session),
+                API_ID,
+                API_HASH
+            )
+
+            await client.connect()
+
+            if not await client.is_user_authorized():
+                logging.warning(f"Client {i} unauthorized")
+                continue
+
+            client.add_event_handler(
+                auto_handler,
+                events.NewMessage(from_users=SOURCE_BOT)
+            )
+
+            client.add_event_handler(
+                auto_handler,
+                events.MessageEdited(from_users=SOURCE_BOT)
+            )
+
+            clients.append(client)
+            locks.append(asyncio.Lock())
+
+            logging.info(f"Client {i} Ready")
+
+        except Exception as e:
+            logging.error(f"Client {i} failed: {e}")
+
+# ==========================================================
+# MAIN
+# ==========================================================
+
 async def main():
-    init_db()
 
-    for i, c in enumerate(clients):
-        await c.connect()
-        if await c.is_user_authorized():
-            c.add_event_handler(handler, events.NewMessage(from_users=SOURCE))
-            c.add_event_handler(handler, events.MessageEdited(from_users=SOURCE))
-            print(f"[READY] Client {i}")
+    await init_db()
+
+    await start_clients()
+
+    if not clients:
+        logging.error("No clients started.")
+        return
 
     asyncio.create_task(job_loop())
+    asyncio.create_task(cleanup_loop())
+
+    logging.info("System Started Successfully")
+
     await asyncio.Event().wait()
+
+# ==========================================================
+# RUN
+# ==========================================================
 
 if __name__ == "__main__":
     asyncio.run(main())
