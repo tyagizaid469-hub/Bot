@@ -281,18 +281,18 @@ async def auto_handler(event):
 
     try:
         # Save when full data available
-        if "email:" in text and "password:" in text:
+        if "recovery email" in text and "🚦 You need to add Recovery email " in text:
 
             data = parse_task(msg.text)
 
-            if data["email"]:
+            if data["recovery_email"]:
                 await save_registration(
                     task["user_id"],
                     msg_id,
                     data
                 )
 
-                logging.info(f"Saved {data['email']}")
+                logging.info(f"Saved {data['recovery_email']}")
 
                 CLIENT_STATE.pop(msg_id, None)
                 CLICKED.pop(msg_id, None)
