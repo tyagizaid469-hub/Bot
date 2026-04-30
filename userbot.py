@@ -1,8 +1,10 @@
 # ==========================================================
-# PROFESSIONAL TELEGRAM MULTI-SESSION AUTO BOT
-# Rewritten Stable Version
-# Requirements:
-# pip install telethon aiosqlite
+# FINAL PRODUCTION TELEGRAM MULTI SESSION USERBOT
+# Stable | Railway Ready | Telethon Production Version
+# ==========================================================
+# requirements.txt
+# telethon==1.41.1
+# aiosqlite==0.20.0
 # ==========================================================
 
 import os
@@ -19,13 +21,17 @@ from telethon.sessions import StringSession
 # CONFIG
 # ==========================================================
 
-API_ID = 36180474
-API_HASH = "1f4ecc2133837a8a3c307f676cb95f88"
+API_ID = int(os.getenv("API_ID", "36180474"))
+API_HASH = os.getenv("API_HASH", "1f4ecc2133837a8a3c307f676cb95f88")
 
-SOURCE_BOT = "@GmailFarmerBot"
+SOURCE_BOT = os.getenv("SOURCE_BOT", "@GmailFarmerBot")
 DB_PATH = "bot.db"
 
 SESSION_STRINGS = [
+    (os.getenv("SESSION1") or "").strip(),
+    (os.getenv("SESSION2") or "").strip(),
+    (os.getenv("SESSION3") or "").strip(),
+    (os.getenv("SESSION4") or "").strip(),
     (os.getenv("SESSION5") or "").strip(),
     (os.getenv("SESSION6") or "").strip(),
 ]
@@ -33,8 +39,9 @@ SESSION_STRINGS = [
 SESSION_STRINGS = [x for x in SESSION_STRINGS if x]
 
 FETCH_DELAY = 1
-JOB_LOOP_DELAY = 1
-TIMEOUT_CLEANUP = 300
+JOB_DELAY = 2
+CLEANUP_AFTER = 300
+RETRY_BUSY_AFTER = 5
 
 # ==========================================================
 # LOGGING
@@ -54,11 +61,8 @@ locks = []
 
 client_index = 0
 
-# message_id -> task info
-CLIENT_STATE = {}
-
-# message_id -> clicked keywords
-CLICKED = {}
+CLIENT_STATE = {}   # msg_id => task
+CLICKED = {}        # msg_id => clicked words
 
 # ==========================================================
 # DATABASE
@@ -86,8 +90,8 @@ async def init_db():
         await db.execute("""
         CREATE TABLE IF NOT EXISTS jobs(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            job_type TEXT NOT NULL,
+            user_id INTEGER,
+            job_type TEXT,
             payload TEXT DEFAULT '',
             status TEXT DEFAULT 'pending',
             created_at INTEGER,
@@ -113,30 +117,34 @@ def get_next_client():
 
     return idx, clients[idx]
 
+def now():
+    return int(time.time())
+
 # ==========================================================
 # PARSER
 # ==========================================================
 
-def parse_task(text: str):
-    first = re.search(r'First name:\s*(.+)', text)
-    last = re.search(r'Last name:\s*(.+)', text)
-    email = re.search(r'Email:\s*(.+)', text)
-    password = re.search(r'Password:\s*(.+)', text)
-    recovery = re.search(r'Recovery email:\s*(.+)', text)
+def parse_task(text):
+
+    first = re.search(r"First name:\s*(.+)", text)
+    last = re.search(r"Last name:\s*(.+)", text)
+    email = re.search(r"Email:\s*(.+)", text)
+    password = re.search(r"Password:\s*(.+)", text)
+    recovery = re.search(r"Recovery email:\s*(.+)", text)
 
     return {
         "first_name": first.group(1).strip() if first else "",
         "last_name": last.group(1).strip() if last else "",
         "email": email.group(1).strip() if email else "",
         "password": password.group(1).strip() if password else "",
-        "recovery_email": recovery.group(1).strip() if recovery else "Not Provided",
+        "recovery_email": recovery.group(1).strip() if recovery else "Not Provided"
     }
 
 # ==========================================================
 # BUTTON CLICKER
 # ==========================================================
 
-async def click_button(msg, keyword: str):
+async def click_button(msg, keyword):
 
     if not msg.buttons:
         return False
@@ -147,23 +155,43 @@ async def click_button(msg, keyword: str):
     for row in msg.buttons:
         for btn in row:
 
-            text = (btn.text or "").lower()
+            txt = (btn.text or "").lower().strip()
 
-            if keyword in text and keyword not in CLICKED[msg_id]:
+            if keyword in txt and keyword not in CLICKED[msg_id]:
                 try:
                     await msg.click(text=btn.text)
+
                     CLICKED[msg_id].add(keyword)
 
-                    logging.info(f"Clicked '{keyword}' | Msg {msg_id}")
+                    logging.info(f"Clicked [{keyword}] on {msg_id}")
                     return True
 
                 except Exception as e:
-                    logging.error(f"Button click failed: {e}")
+                    logging.error(f"Click failed: {e}")
+
+    return False
+
+async def smart_click(msg):
+
+    order = [
+        "done",
+        "complete",
+        "confirm",
+        "next",
+        "continue",
+        "start"
+    ]
+
+    for key in order:
+        ok = await click_button(msg, key)
+        if ok:
+            await asyncio.sleep(1)
+            return True
 
     return False
 
 # ==========================================================
-# SAVE RESULT
+# SAVE REGISTRATION
 # ==========================================================
 
 async def save_registration(user_id, msg_id, data):
@@ -193,7 +221,7 @@ async def save_registration(user_id, msg_id, data):
             data["recovery_email"],
             f"{user_id}_{msg_id}",
             msg_id,
-            int(time.time()),
+            now(),
             "fetched"
         ))
 
@@ -206,6 +234,7 @@ async def save_registration(user_id, msg_id, data):
 async def auto_handler(event):
 
     msg = event.message
+
     if not msg:
         return
 
@@ -218,30 +247,41 @@ async def auto_handler(event):
         return
 
     try:
-        # FINAL DATA DETECTED
+
+        # Save final account
         if "email:" in text and "password:" in text:
 
-            parsed = parse_task(msg.text)
+            data = parse_task(msg.text)
 
-            if parsed["email"]:
-
+            if data["email"]:
                 await save_registration(
                     task["user_id"],
                     msg_id,
-                    parsed
+                    data
                 )
 
-                logging.info(f"Saved: {parsed['email']}")
+                logging.info(f"Saved {data['email']}")
 
                 CLIENT_STATE.pop(msg_id, None)
                 CLICKED.pop(msg_id, None)
                 return
 
-        # BUTTON FLOW
-        await click_button(msg, "done")
-        await click_button(msg, "complete")
-        await click_button(msg, "confirm")
-        await click_button(msg, "next")
+        # Busy Server Retry
+        if "server busy" in text or "5 sec" in text:
+            logging.warning("Server busy detected")
+
+            await asyncio.sleep(RETRY_BUSY_AFTER)
+
+            asyncio.create_task(
+                fetch_task(task["user_id"])
+            )
+
+            CLIENT_STATE.pop(msg_id, None)
+            CLICKED.pop(msg_id, None)
+            return
+
+        # Button click flow
+        await smart_click(msg)
 
     except Exception as e:
         logging.error(f"AUTO HANDLER ERROR: {e}")
@@ -255,22 +295,24 @@ async def fetch_task(user_id):
     idx, client = get_next_client()
 
     if client is None:
-        logging.warning("No active clients.")
+        logging.warning("No active clients")
         return
 
     async with locks[idx]:
 
         try:
-            logging.info(f"Fetching task for user {user_id}")
+            logging.info(f"Fetching task for {user_id}")
 
-            await client.send_message(
+            async with client.conversation(
                 SOURCE_BOT,
-                "➕ Register a new Gmail"
-            )
+                timeout=30
+            ) as conv:
 
-            await asyncio.sleep(FETCH_DELAY)
+                await conv.send_message(
+                    "➕ Register a new Gmail"
+                )
 
-            msg = await client.get_response(SOURCE_BOT)
+                msg = await conv.get_response()
 
             CLIENT_STATE[msg.id] = {
                 "user_id": user_id,
@@ -278,7 +320,10 @@ async def fetch_task(user_id):
                 "created": time.time()
             }
 
-            logging.info(f"Tracking Msg ID {msg.id}")
+            logging.info(f"Tracking {msg.id}")
+
+            # Instant click
+            await smart_click(msg)
 
         except Exception as e:
             logging.error(f"FETCH ERROR: {e}")
@@ -297,7 +342,8 @@ async def job_loop():
                 db.row_factory = aiosqlite.Row
 
                 cur = await db.execute("""
-                SELECT * FROM jobs
+                SELECT *
+                FROM jobs
                 WHERE status='pending'
                 ORDER BY id ASC
                 LIMIT 1
@@ -306,7 +352,7 @@ async def job_loop():
                 job = await cur.fetchone()
 
                 if not job:
-                    await asyncio.sleep(JOB_LOOP_DELAY)
+                    await asyncio.sleep(JOB_DELAY)
                     continue
 
                 await db.execute("""
@@ -314,18 +360,14 @@ async def job_loop():
                 SET status='processing',
                     updated_at=?
                 WHERE id=?
-                """, (
-                    int(time.time()),
-                    job["id"]
-                ))
+                """, (now(), job["id"]))
 
                 await db.commit()
 
-            # PROCESS JOB
+            # Process
             if job["job_type"] == "fetch":
                 await fetch_task(job["user_id"])
 
-            # MARK DONE
             async with aiosqlite.connect(DB_PATH) as db:
 
                 await db.execute("""
@@ -333,10 +375,7 @@ async def job_loop():
                 SET status='done',
                     updated_at=?
                 WHERE id=?
-                """, (
-                    int(time.time()),
-                    job["id"]
-                ))
+                """, (now(), job["id"]))
 
                 await db.commit()
 
@@ -352,20 +391,23 @@ async def cleanup_loop():
 
     while True:
 
-        now = time.time()
+        try:
+            current = time.time()
+            remove = []
 
-        remove = []
+            for msg_id, data in CLIENT_STATE.items():
 
-        for msg_id, data in CLIENT_STATE.items():
+                if current - data["created"] > CLEANUP_AFTER:
+                    remove.append(msg_id)
 
-            if now - data["created"] > TIMEOUT_CLEANUP:
-                remove.append(msg_id)
+            for msg_id in remove:
+                CLIENT_STATE.pop(msg_id, None)
+                CLICKED.pop(msg_id, None)
 
-        for msg_id in remove:
-            CLIENT_STATE.pop(msg_id, None)
-            CLICKED.pop(msg_id, None)
+                logging.info(f"Cleanup {msg_id}")
 
-            logging.info(f"Cleaned timeout msg {msg_id}")
+        except Exception as e:
+            logging.error(f"CLEANUP ERROR: {e}")
 
         await asyncio.sleep(30)
 
@@ -387,7 +429,7 @@ async def start_clients():
             await client.connect()
 
             if not await client.is_user_authorized():
-                logging.warning(f"Client {i} unauthorized")
+                logging.warning(f"Unauthorized {i}")
                 continue
 
             client.add_event_handler(
@@ -415,11 +457,10 @@ async def start_clients():
 async def main():
 
     await init_db()
-
     await start_clients()
 
     if not clients:
-        logging.error("No clients started.")
+        logging.error("No clients started")
         return
 
     asyncio.create_task(job_loop())
