@@ -3505,7 +3505,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # TEMP STORE
     # =========================
     temp_data[user.id] = {
-        "name": name_raw,
+        "name": first_name,
         "email": email,
         "password": password,
         "recovery_email": recovery_email,
@@ -3516,7 +3516,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # =========================
     # SAFE FORMAT
     # =========================
-    name = _safe_code(name_raw)
+    name = _safe_code(first_name)
     email = _safe_code(email)
     password = _safe_code(password)
     recovery_email = _safe_code(recovery_email)
@@ -3526,13 +3526,16 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # =========================
     msg_text = (
         "Register account using the specified data and get from ₹20 to ₹22$\n\n"
-        f"First name: `{name}`"
-        f"Last name: ✖️"
-        f"Email: `{email}`"
+        f"First name: `{name}`\n"
+        f"Last name: `✖️`\n"
+        f"Email: `{email}`\n"
         f"Password: `{password}`\n"
         "🔐 Be sure to use the specified data, otherwise the account will not be paid.\n"
-        "______________________________\n\n"
-        f"🚦 You need to add Recovery email  `{recovery_email}`"
+        "=========================\n\n"
+        "Age choose : 1990-2007\n"
+        "=========================\n\n"
+        "Gender : Your choice,\n"
+                
     )
 
     await update.message.reply_text(
