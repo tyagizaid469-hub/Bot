@@ -14,7 +14,7 @@ from telethon.errors import FloodWaitError
 # ==========================================================
 
 API_ID = int(os.getenv('API_ID', '36180474'))
-API_HASH = os.getenv('API_HASH', '')
+API_HASH = os.getenv('API_HASH', '1f4ecc2133837a8a3c307f676cb95f88')
 SOURCE_BOT = os.getenv('SOURCE_BOT', '@GmailFarmerBot')
 DB_PATH = 'bot.db'
 
