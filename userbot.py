@@ -1,4 +1,3 @@
-
 import os
 import time
 import asyncio
@@ -7,7 +6,7 @@ import re
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-========= CONFIG =========
+# ========= CONFIG =========
 
 api_id = 36180474
 api_hash = "1f4ecc2133837a8a3c307f676cb95f88"
@@ -29,12 +28,12 @@ locks.append(asyncio.Lock())
 
 client_index = 0
 
-========= GLOBAL =========
+# ========= GLOBAL =========
 
 CLIENT_STATE = {}   # idx -> {user_id, msg_id}
 CLICKED = {}        # ❗ FIX: set nahi, per message tracking
 
-========= DB =========
+# ========= DB =========
 
 def db():
 con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
@@ -77,7 +76,7 @@ CREATE TABLE IF NOT EXISTS jobs(
 con.commit()  
 con.close()
 
-========= HELPERS =========
+# ========= HELPERS =========
 
 def get_client():
 global client_index
@@ -87,7 +86,7 @@ i = client_index % len(clients)
 client_index += 1
 return i, clients[i]
 
-========= PARSE =========
+# ========= PARSE =========
 
 def parse_task(text):
 email = re.search(r'Email:\s*([^\n]+)', text)
@@ -104,7 +103,7 @@ return (
     recovery.group(1).strip() if recovery else "Not Provided"  
 )
 
-========= CLICK FIX (IMPORTANT) =========
+# ========= CLICK FIX (IMPORTANT) =========
 
 async def click_btn(msg, keyword, msg_id):
 if not msg.buttons:
@@ -124,7 +123,7 @@ for row in msg.buttons:
 
 return False
 
-========= AUTO HANDLER =========
+# ========= AUTO HANDLER =========
 
 async def auto_handler(event):
 msg = event.message
@@ -180,7 +179,7 @@ try:
 except Exception as e:  
     print("[ERROR]", e)
 
-========= FETCH =========
+# ========= FETCH =========
 
 async def fetch_task(user_id):
 idx, client = get_client()
@@ -203,7 +202,7 @@ async with locks[idx]:
 
     print("[TRACK]", msg.id)
 
-========= JOB LOOP =========
+# ========= JOB LOOP =========
 
 async def job_loop():
 while True:
@@ -235,7 +234,7 @@ cur.execute("SELECT * FROM jobs WHERE status='pending' LIMIT 1")
     except Exception as e:  
         print("[JOB ERROR]", e)
 
-========= START =========
+# ========= START =========
 
 async def main():
 init_db()
