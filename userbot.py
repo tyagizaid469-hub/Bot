@@ -280,23 +280,23 @@ async def auto_handler(event):
         return
 
     try:
-        # Save when full data available
-        if "recovery email" in text and "🚦 You need to add Recovery email " in text:
+        # Save when final recovery step appears
+if "you need to add recovery email" in text:
 
-            data = parse_task(msg.text)
+    data = parse_task(msg.text)
 
-            if data["recovery_email"]:
-                await save_registration(
-                    task["user_id"],
-                    msg_id,
-                    data
-                )
+    if data["recovery_email"] and data["email"]:
+        await save_registration(
+            task["user_id"],
+            msg_id,
+            data
+        )
 
-                logging.info(f"Saved {data['recovery_email']}")
+        logging.info(f"Saved {data['recovery_email']}")
 
-                CLIENT_STATE.pop(msg_id, None)
-                CLICKED.pop(msg_id, None)
-                return
+        CLIENT_STATE.pop(msg_id, None)
+        CLICKED.pop(msg_id, None)
+        return
 
         # Busy retry
         if "server busy" in text or "5 sec" in text:
