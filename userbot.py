@@ -249,7 +249,7 @@ async def auto_handler(event):
     try:
 
         # Save final account
-        if "email:" in text and "password:" in text:
+        if "recovery email" in text and "add" in text:
 
             data = parse_task(msg.text)
 
