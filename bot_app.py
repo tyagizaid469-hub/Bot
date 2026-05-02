@@ -736,7 +736,10 @@ def webapp_verify_kb():
 
 MAIN_MENU = ReplyKeyboardMarkup([["➕ Register a new account", "📋 My accounts"],["💰 Balance", "👥 My referrals"],["⚙️ Settings", "✅ TASK"],["💬 Help", "👤 Profile"]], resize_keyboard=True)
 
-def reg_buttons(action_id, task_id=None):
+
+def reg_buttons(action_id):
+    # 3 buttons (stacked like in your reference):
+    # 1) DONE  2) CANCEL  3) How to create account (video)
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("DONE✅", callback_data=f"REG_DONE:{action_id}")],
         [InlineKeyboardButton("CANCEL ❌ REGISTRATION", callback_data=f"REG_CANCEL:{action_id}")],
