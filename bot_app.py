@@ -3193,7 +3193,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         msg_text,
         parse_mode="Markdown",
-        reply_markup=reg_buttons(action_id, task_id),
+        reply_markup=reg_buttons(action_id),
     )
 # =========================
 # CALLBACKS
