@@ -10,4 +10,4 @@ python-dotenv==1.0.1
 flask
 telethon
 asyncio
-aiosqlite==0.20.0
+asyncpg==0.29.0
